@@ -1,0 +1,98 @@
+/* docs/.vitepress/theme/custom.css */
+:root {
+    /* Customize the color scheme */
+    --vp-c-brand: #3f51b5;
+    --vp-c-brand-light: #5c6bc0;
+    --vp-c-brand-lighter: #7986cb;
+    --vp-c-brand-dark: #303f9f;
+    --vp-c-brand-darker: #283593;
+
+    /* Improve typography */
+    --vp-font-family-base: 'Source Sans Pro', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --vp-font-family-mono: 'Fira Code', 'JetBrains Mono', monospace;
+
+    /* Fix content width for larger screens */
+    --vp-layout-max-width: 1440px;
+
+    /* Adjust content width on large screens - CRUCIAL FIX */
+    --vp-content-width: 900px;
+    --vp-home-hero-width: 900px;
+
+    /* Fix sidebar width to be more proportional */
+    --vp-sidebar-width: 280px;
+}
+
+/* Dark theme adjustments */
+.dark {
+    --vp-c-brand: #7986cb;
+    --vp-c-brand-light: #9fa8da;
+    --vp-c-brand-lighter: #c5cae9;
+    --vp-c-brand-dark: #5c6bc0;
+    --vp-c-brand-darker: #3f51b5;
+}
+
+/* Fix layout on large screens */
+@media (min-width: 1440px) {
+    .VPContent.is-home {
+        padding-bottom: 96px !important;
+    }
+
+    .VPHero .container {
+        max-width: var(--vp-home-hero-width) !important;
+    }
+
+    .VPHome .VPHomeFeatures .container {
+        max-width: var(--vp-content-width) !important;
+    }
+
+    .VPDoc .container {
+        max-width: var(--vp-layout-max-width) !important;
+    }
+
+    .VPDoc .content {
+        max-width: var(--vp-content-width) !important;
+    }
+}
+
+/* Better table styling */
+.vp-doc table {
+    width: 100%;
+    display: table;
+    border-collapse: collapse;
+    margin: 1em 0;
+    overflow-x: auto;
+}
+
+.vp-doc tr:nth-child(2n) {
+    background-color: var(--vp-c-bg-soft);
+}
+
+.vp-doc th,
+.vp-doc td {
+    border: 1px solid var(--vp-c-divider);
+    padding: 8px 16px;
+}
+
+/* Code block improvements */
+.vp-doc div[class*='language-'] {
+    border-radius: 8px;
+    margin: 16px 0;
+}
+
+/* Better image handling */
+.vp-doc img {
+    border-radius: 8px;
+    max-width: 100%;
+    height: auto;
+}
+
+/* Better mobile experience */
+@media (max-width: 768px) {
+    :root {
+        --vp-sidebar-width: 240px;
+    }
+
+    .vp-doc {
+        padding: 0 1rem;
+    }
+}
