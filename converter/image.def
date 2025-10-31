@@ -1,0 +1,20 @@
+Bootstrap: docker
+From: rootproject/root:latest
+
+%post
+    apt-get update && \
+    apt-get -y upgrade && \
+    apt-get install -y git cmake build-essential nlohmann-json3-dev wget unzip && \
+    rm -rf /var/lib/apt/lists/*
+
+    wget https://download.pytorch.org/libtorch/nightly/cpu/libtorch-shared-with-deps-latest.zip
+    unzip libtorch-shared-with-deps-latest.zip -d /opt
+
+%environment
+    export LIBTORCH=/opt/libtorch
+    export LD_LIBRARY_PATH=$LIBTORCH/lib:$LD_LIBRARY_PATH
+    export CMAKE_PREFIX_PATH=$LIBTORCH/share/cmake:$CMAKE_PREFIX_PATH
+
+
+%runscript
+    exec /bin/bash
