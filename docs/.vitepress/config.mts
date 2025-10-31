@@ -8,6 +8,11 @@ export default withMermaid({
     description: 'Documentation for NPS SRO ML analysis',
     base: '/nps-sro-ml/',
 
+    // Ignore dead links for static assets (PDFs, PowerPoint, etc.)
+    ignoreDeadLinks: [
+        /\.(pdf|pptx|docx|xlsx|zip|tar|gz)$/i
+    ],
+
     // Improved head settings with proper KaTeX styling
     head: [
         ['link', { rel: 'stylesheet', href: 'https://cdn.jsdelivr.net/npm/katex@0.16.0/dist/katex.min.css' }],
