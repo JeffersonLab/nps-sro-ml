@@ -1,8 +1,69 @@
 #include "NPS.hh"
 
+#include <fstream>
+#include <sstream>
+#include <stdexcept>
+#include <unordered_map>
+
+namespace NPS {
+
+Geometry::Geometry(const std::string &config_file) { loadConfig(config_file); }
+
+void Geometry::loadConfig(const std::string &config_file) {
+	std::ifstream fin(config_file);
+	if (!fin.is_open()) {
+		throw std::runtime_error("Cannot open Geometry config: " + config_file);
+	}
+
+	std::string line;
+	while (std::getline(fin, line)) {
+		if (line.empty() || line[0] == '#') {
+			continue;
+		}
+
+		BlockInfo info;
+		std::istringstream iss(line);
+		iss >> info.channel >> info.row >> info.col >> info.crate >> info.slot;
+		if (!iss) {
+			continue;
+		}
+		mBlocks.push_back(info);
+		mIndexMap[info.channel] = info;
+		mRcToIndex[{info.row, info.col}] = info.channel;
+	}
+}
+
+int Geometry::getBlockFromColRow(int col, int row) const {
+	auto it = mRcToIndex.find({row, col});
+	if (it == mRcToIndex.end())
+		throw std::out_of_range("Invalid (row, col)");
+	return it->second;
+}
+
+std::pair<int, int> Geometry::getColRowFromBlock(int block) const {
+	auto it = mIndexMap.find(block);
+	if (it == mIndexMap.end())
+		throw std::out_of_range("Invalid block index");
+	return {it->second.col, it->second.row};
+}
+
+int Geometry::getCrateFromBlock(int block) const {
+	auto it = mIndexMap.find(block);
+	if (it == mIndexMap.end())
+		throw std::out_of_range("Invalid block index");
+	return it->second.crate;
+}
+
+int Geometry::getSlotFromBlock(int block) const {
+	auto it = mIndexMap.find(block);
+	if (it == mIndexMap.end())
+		throw std::out_of_range("Invalid block index");
+	return it->second.slot;
+}
+
 void setBranchAddresses(TChain *&chain, npsBranches &buffer) {
 
-    // Global branches
+	// Global branches
 	chain->SetBranchAddress("g.evtime", &buffer.g_evtime);
 
 	// Ndata.NPS branches
@@ -110,11 +171,6 @@ void setBranchAddresses(TChain *&chain, npsBranches &buffer) {
 	chain->SetBranchAddress("NPS.cal.trk.pz", &buffer.NPS_cal_trk_pz[0]);
 	chain->SetBranchAddress("NPS.cal.trk.x", &buffer.NPS_cal_trk_x[0]);
 	chain->SetBranchAddress("NPS.cal.trk.y", &buffer.NPS_cal_trk_y[0]);
-	chain->SetBranchAddress("NPS.cal.vldColumn", &buffer.NPS_cal_vldColumn[0]);
-	chain->SetBranchAddress("NPS.cal.vldHiChannelMask", &buffer.NPS_cal_vldHiChannelMask[0]);
-	chain->SetBranchAddress("NPS.cal.vldLoChannelMask", &buffer.NPS_cal_vldLoChannelMask[0]);
-	chain->SetBranchAddress("NPS.cal.vldPMT", &buffer.NPS_cal_vldPMT[0]);
-	chain->SetBranchAddress("NPS.cal.vldRow", &buffer.NPS_cal_vldRow[0]);
 	chain->SetBranchAddress("NPS.cal.vtpClusE", &buffer.NPS_cal_vtpClusE[0]);
 	chain->SetBranchAddress("NPS.cal.vtpClusSize", &buffer.NPS_cal_vtpClusSize[0]);
 	chain->SetBranchAddress("NPS.cal.vtpClusTime", &buffer.NPS_cal_vtpClusTime[0]);
@@ -175,3 +231,60 @@ void setBranchAddresses(TChain *&chain, npsBranches &buffer) {
 	chain->SetBranchAddress("NPScorrUS_measCurr", &buffer.NPScorrUS_measCurr);
 	chain->SetBranchAddress("NPScorrUS_setCurr", &buffer.NPScorrUS_setCurr);
 }
+
+void readSignal(
+	const int &NSampWaveForm, const std::array<double, NPS::NDATA> &SampWaveForm, std::vector<int> &blocks,
+	std::vector<std::vector<double>> &signals
+) {
+	signals.clear();
+	blocks.clear();
+
+	// Reserve memory to minimize reallocations
+	blocks.reserve(NPS::NBLOCKS);
+	signals.reserve(NPS::NBLOCKS);
+
+	std::unordered_set<int> block_seen;
+	block_seen.reserve(NPS::NBLOCKS);
+
+	int ns = 0;
+
+	while (ns < NSampWaveForm) {
+		int bloc = static_cast<int>(SampWaveForm[ns++]);  // block (slot) number
+		int nsamp = static_cast<int>(SampWaveForm[ns++]); // number of samples (e.g., 110)
+
+		// Check bounds — ensure enough samples left
+		if (ns + nsamp > NSampWaveForm) {
+			std::cerr << "Warning: not enough samples for block " << bloc << " (expected " << nsamp << ", available "
+					  << (NSampWaveForm - ns) << "). Stopping readSignal.\n";
+			break;
+		}
+
+		// Historical remapping
+		if (bloc == 2000) {
+			bloc = 1080;
+		} else if (bloc == 2001) {
+			bloc = 1081;
+		}
+
+		// Skip invalid or duplicate blocks
+		if (bloc < 0 || bloc >= NPS::NBLOCKS || block_seen.find(bloc) != block_seen.end()) {
+			ns += nsamp;
+			continue;
+		}
+
+		block_seen.insert(bloc);
+		blocks.emplace_back(bloc);
+
+		// Read waveform samples efficiently
+		std::vector<double> sig;
+		sig.reserve(nsamp);
+
+		for (int it = 0; it < nsamp; ++it)
+			sig.emplace_back(SampWaveForm[ns++]);
+
+		// Move the waveform into the result vector (no copy)
+		signals.emplace_back(std::move(sig));
+	}
+}
+
+} // namespace NPS

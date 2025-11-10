@@ -25,12 +25,6 @@
 void add_arguments(int argc, char **argv);
 argparse::ArgumentParser ARGS("NPS_DataConvertor", "1.0");
 
-template <typename T, std::size_t N>
-void readSignal(
-	const int &NSampWaveForm, const std::array<T, N> &SampWaveForm, std::vector<int> &pres,
-	std::vector<std::vector<double>> &signals
-);
-
 int main(int argc, char **argv) {
 	add_arguments(argc, argv);
 
@@ -49,22 +43,22 @@ int main(int argc, char **argv) {
 	chain->Add(filename.c_str());
 	auto entries = chain->GetEntries();
 
-	npsBranches buffer;
-	setBranchAddresses(chain, buffer);
+	NPS::npsBranches buffer;
+	NPS::setBranchAddresses(chain, buffer);
 
 	int processedEntries = 0;
 	int useEntries = readEntries == -1 ? chain->GetEntries() : std::min(readEntries, (int)chain->GetEntries());
 
-	GraphBuilder graphBuilder(NTIME);
+	GraphBuilder graphBuilder(NPS::NTIME);
 
 	while (processedEntries < useEntries) {
 		// std::cout << "Processing entry " << processedEntries << "/" << useEntries << "\n";
 		std::cout << "\rProcessing entry " << processedEntries + 1 << "/" << useEntries << std::flush;
 		chain->GetEntry(startEntry + processedEntries);
 
-		if (buffer.Ndata_NPS_cal_fly_adcSampWaveform > NDATA) {
+		if (buffer.Ndata_NPS_cal_fly_adcSampWaveform > NPS::NDATA) {
 			std::cerr << "Warning: Ndata_NPS_cal_fly_adcSampWaveform > NDATA ("
-					  << buffer.Ndata_NPS_cal_fly_adcSampWaveform << " > " << NDATA << "). Skipping event "
+					  << buffer.Ndata_NPS_cal_fly_adcSampWaveform << " > " << NPS::NDATA << "). Skipping event "
 					  << processedEntries << ".\n";
 			processedEntries++;
 			continue;
@@ -73,14 +67,14 @@ int main(int argc, char **argv) {
 		std::vector<std::vector<double>> signals;
 		std::vector<int> blocks;
 
-		readSignal(buffer.Ndata_NPS_cal_fly_adcSampWaveform, buffer.NPS_cal_fly_adcSampWaveform, blocks, signals);
+		NPS::readSignal(buffer.Ndata_NPS_cal_fly_adcSampWaveform, buffer.NPS_cal_fly_adcSampWaveform, blocks, signals);
 
 		if (signals.size() == 0) {
 			std::cerr << "Warning: no signals found. Skipping event " << processedEntries << ".\n";
 			processedEntries++;
 			continue;
 		}
-		if (signals.size() > 0 && signals[0].size() != NTIME) {
+		if (signals.size() > 0 && signals[0].size() != NPS::NTIME) {
 			std::cerr << "Warning: signals size is " << signals[0].size() << " instead of 110. Skipping event "
 					  << processedEntries << ".\n";
 			processedEntries++;
@@ -120,7 +114,6 @@ int main(int argc, char **argv) {
 		auto edgeIndex = toTensor2D(graphData.edgeIndex);			  // [2][num_edges]
 		auto edgeTargetIndex = toTensor2D(graphData.edgeTargetIndex); // [2][num_target_edges]
 
-
 		std::string output_file = Form("%s/%04d/%d/%08d.pt", output_dir.c_str(), run, seg, processedEntries);
 		std::filesystem::create_directories(std::filesystem::path(output_file).parent_path());
 		saveTensors(
@@ -131,60 +124,6 @@ int main(int argc, char **argv) {
 		processedEntries++;
 	}
 	return 0;
-}
-
-template <typename T, std::size_t N>
-void readSignal(
-	const int &NSampWaveForm, const std::array<T, N> &SampWaveForm, std::vector<int> &blocks,
-	std::vector<std::vector<double>> &signals
-) {
-
-	signals.clear();
-	blocks.clear();
-	std::map<int, bool> block_seen;
-
-	int ns = 0;
-
-	while (ns < NSampWaveForm) {
-		int bloc = SampWaveForm[ns++];	// bloc number (actually the slot number)
-		int nsamp = SampWaveForm[ns++]; // number of time samples for this bloc = NTIME = 110
-
-		// check for correct unpacking of the waveform
-		if (ns + nsamp > NSampWaveForm) {
-			std::cerr << "Warning: not enough samples for block " << bloc << " (expected " << nsamp << ", available "
-					  << (NSampWaveForm - ns) << "). Stopping readSignal.\n";
-			break;
-		}
-
-		// keep for historical reasons
-		if (bloc == 2000) {
-			bloc = 1080;
-		}
-		if (bloc == 2001) {
-			bloc = 1081;
-		}
-
-		if (bloc >= 0 && bloc < NBLOCKS) {
-
-			if (block_seen.count(bloc) > 0 && block_seen[bloc]) {
-				// this should never happen
-				ns += nsamp;
-				continue;
-			}
-
-			block_seen[bloc] = true;
-			blocks.push_back(bloc);
-
-			std::vector<double> sig;
-			for (int it = 0; it < nsamp; it++) {
-				sig.push_back(SampWaveForm[ns++]);
-			}
-			signals.push_back(sig);
-		} else {
-			ns += nsamp; // skip invalid bloc
-		}
-	}
-	return;
 }
 
 void add_arguments(int argc, char **argv) {
