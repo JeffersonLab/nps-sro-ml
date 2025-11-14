@@ -26,6 +26,7 @@ public:
 	void printConfig() const;
 	bool isTriggered() const;
 
+	const std::vector<bool> &getTriggeredBase() const { return mTriggeredBase; }
 	const std::vector<bool> &getTrigger0() const { return mTrigger0; }
 	const std::vector<bool> &getTrigger1() const { return mTrigger1; }
 	const std::vector<bool> &getTrigger2() const { return mTrigger2; }
@@ -53,6 +54,7 @@ private:
 	double mReadoutThreshold; // VTP_NPS_ECALCLUSTER_CLUSTER_READOUT_THR;
 
 	// for storing result in the same event
+	std::vector<bool> mTriggeredBase;  // [nTimeWindowBins]
 	std::vector<bool> mTrigger0;	   // [nTimeWindowBins]
 	std::vector<bool> mTrigger1;	   // [nTimeWindowBins]
 	std::vector<bool> mTrigger2;	   // [nTimeWindowBins]

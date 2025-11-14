@@ -60,7 +60,6 @@ bool VTP::loadConfig(const std::string &filename) {
 	configFile.close();
 
 	this->calcTimeWindowBins(mHitTimingWindow);
-
 	return true;
 }
 
@@ -92,43 +91,31 @@ void VTP::resetConfig() {
 
 std::vector<bool> VTP::getTriggerType(const std::vector<double> &energies, const std::vector<bool> &hits) {
 
-	std::vector<bool> triggers(6, false); // 6 trigger types
+	std::vector<bool> triggers(7, false); // base trigger, trigger 0-5
 
 	auto seedE = energies[0]; // seed block is 0-th index
+	auto maxE = *std::max_element(energies.begin(), energies.end());
 
-	if (std::max_element(energies.begin(), energies.end()) != energies.begin()) {
-		return triggers;
+	// base trigger
+	// Central block has energy >= VTP_NPS_ECALCLUSTER_SEED_THR and is the maximum energy block in the grid
+	if (seedE >= mSeedThreshold && std::abs(seedE - maxE) < 1e-9) {
+		triggers[0] = true;
 	}
 
-	triggers = {1, 0, 0, 1, 0, 0}; // for testing
+	// clus trigger -> readout
+	auto totalE = std::accumulate(energies.begin(), energies.end(), 0.0);
+	int nHits = std::count(hits.begin(), hits.end(), true);
 
-	// // base trigger
-	// auto seedE = energies[0]; // seed block is 0-th index
+	if (nHits >= mMinHits && totalE >= mClusterThreshold) {
+		triggers[0] = true; // cluster trigger
 
-	// // Central block has energy >= VTP_NPS_ECALCLUSTER_SEED_THR
-	// if (seedE < mSeedThreshold) {
-	// 	return triggers;
-	// }
-
-	// // seed has to be local maximum
-	// if (std::max_element(energies.begin(), energies.end()) != energies.begin()) {
-	// 	return triggers;
-	// }
-
-	// // clus trigger -> readout
-	// auto totalE = std::accumulate(energies.begin(), energies.end(), 0.0);
-	// int nHits = std::count(hits.begin(), hits.end(), true);
-
-	// if (nHits >= mMinHits && totalE >= mClusterThreshold) {
-	// 	triggers[0] = true; // cluster trigger
-
-	// 	if (totalE >= mPairClusterThreshold) {
-	// 		triggers[3] = true; // local pair 1
-	// 							// if there is another cluster seed in the same crate
-	// 							// VTP_NPS_ECALCLUSTER_CLUSTER_PAIR_TRIGGER_WIDTH
-	// 							// triggers[4] = true; // local pair 2
-	// 	}
-	// }
+		if (totalE >= mPairClusterThreshold) {
+			triggers[3] = true; // local pair 1
+								// if there is another cluster seed in the same crate
+								// VTP_NPS_ECALCLUSTER_CLUSTER_PAIR_TRIGGER_WIDTH
+								// triggers[4] = true; // local pair 2
+		}
+	}
 
 	return triggers;
 }
@@ -136,7 +123,6 @@ std::vector<bool> VTP::getTriggerType(const std::vector<double> &energies, const
 void VTP::process(
 	const std::vector<std::vector<double>> &gridEnergies, const std::vector<std::vector<int>> &gridTimes
 ) {
-
 	resetArrays();
 
 	// input = blocks of energies and times within the entire event time window
@@ -164,29 +150,31 @@ void VTP::process(
 			for (int iHit = 0; iHit < gridTimes[iBlock].size(); iHit++) {
 				auto t = gridTimes[iBlock][iHit];
 
+				// auto tns = t * mDeltaT;
+				// if (tns < 50 || tns > 370) {
+				//     continue; // only consider hits within [50, 370] ns
+				// }
+
 				if (t >= startTime && t < endTime) {
 					hitBlocks[iBlock] = true;
 					if (hitEnergies[iBlock] > 0.0) {
 						throw std::runtime_error("Error: multiple hits in one time window not allowed.");
 					}
+
 					hitEnergies[iBlock] += gridEnergies[iBlock][iHit];
 					hitTimes[iBlock] = t;
 				}
 			}
 		}
 
-		for (int i = 0; i < nBlocks; i++) {
-			std::cout << "iWindow " << iWindow << " Block " << i << ": hit=" << hitBlocks[i]
-					  << ", energy=" << hitEnergies[i] << ", time=" << hitTimes[i] << "\n";
-		}
-
-		auto triggerType = getTriggerType(hitEnergies, hitBlocks); // {0,0,0,0,0,0}, {1,0,0,1,0,0}, etc ...
-		mTrigger0[iWindow] = triggerType[0];
-		mTrigger1[iWindow] = triggerType[1];
-		mTrigger2[iWindow] = triggerType[2];
-		mTrigger3[iWindow] = triggerType[3];
-		mTrigger4[iWindow] = triggerType[4];
-		mTrigger5[iWindow] = triggerType[5];
+		auto triggerType = getTriggerType(hitEnergies, hitBlocks); // {0,0,0,0,0,0,0}, {1,0,0,1,0,0}, etc ...
+		mTriggeredBase[iWindow] = triggerType[0];
+		mTrigger0[iWindow] = triggerType[1];
+		mTrigger1[iWindow] = triggerType[2];
+		mTrigger2[iWindow] = triggerType[3];
+		mTrigger3[iWindow] = triggerType[4];
+		mTrigger4[iWindow] = triggerType[5];
+		mTrigger5[iWindow] = triggerType[6];
 		mTriggered[iWindow] = std::any_of(triggerType.begin(), triggerType.end(), [](bool v) { return v; });
 
 		if (mTriggered[iWindow]) {
@@ -218,6 +206,7 @@ void VTP::resetArrays() {
 	mTriggered.clear();
 	mTriggerTimes.clear();
 
+	mTriggeredBase.resize(mTimeWindowBins, false);
 	mTrigger0.resize(mTimeWindowBins, false);
 	mTrigger1.resize(mTimeWindowBins, false);
 	mTrigger2.resize(mTimeWindowBins, false);
@@ -231,10 +220,5 @@ void VTP::resetArrays() {
 }
 
 bool VTP::isTriggered() const {
-	return std::any_of(mTrigger0.begin(), mTrigger0.end(), [](bool v) { return v; }) ||
-		   std::any_of(mTrigger1.begin(), mTrigger1.end(), [](bool v) { return v; }) ||
-		   std::any_of(mTrigger2.begin(), mTrigger2.end(), [](bool v) { return v; }) ||
-		   std::any_of(mTrigger3.begin(), mTrigger3.end(), [](bool v) { return v; }) ||
-		   std::any_of(mTrigger4.begin(), mTrigger4.end(), [](bool v) { return v; }) ||
-		   std::any_of(mTrigger5.begin(), mTrigger5.end(), [](bool v) { return v; });
+	return std::any_of(mTriggeredBase.begin(), mTriggeredBase.end(), [](bool v) { return v; });
 }
