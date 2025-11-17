@@ -1,8 +1,6 @@
 import torch
 import pytest
 from base.model import BaseModel
-
-
 import torch.nn as nn
 
 
@@ -26,7 +24,6 @@ class ConcreteModel(BaseModel):
 
 
 class TestBaseModel:
-
     def test_forward_not_implemented(self):
         """Test that forward method raises NotImplementedError when not overridden"""
 
@@ -35,7 +32,6 @@ class TestBaseModel:
 
         with pytest.raises(NotImplementedError):
             IncompleteModel().forward()
-            
 
     def test_concrete_model_forward(self):
         """Test that concrete model with forward implementation works"""
@@ -60,7 +56,6 @@ class TestBaseModel:
         # fc2: 20*5 + 5 = 105
         # frozen_layer should not be counted: 5*3 + 3 = 18
         expected_params = 220 + 105  # = 325
-
         assert f"Trainable parameters: {expected_params}" in str_output
 
     def test_str_includes_model_architecture(self):

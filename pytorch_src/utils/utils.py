@@ -104,7 +104,8 @@ def import_attr(
 
         attr = getattr(module, attr_name, None)
         if attr is not None:
-            attr = attr(*args, **kwargs)
+            if args or kwargs:
+                attr = attr(*args, **kwargs)
             return attr, mod_name
         else:
             log_msg[mod_name].append("Attribute not found.")
