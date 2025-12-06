@@ -5,33 +5,75 @@ from typing import Optional
 from utils.masks import TriangularCausalMask
 
 
-class FullAttention(nn.Module):
+class BaseAttention(nn.Module):
+    """
+    Base class for attention mechanisms. Users should extend this class and implement the compute_scores and combine_values methods.
+    """
+
     def __init__(
         self,
+        *,
         mask_flag: bool = True,
         scale: Optional[float] = None,
         attention_dropout: float = 0.1,
         output_attention: bool = False,
     ):
-        super(FullAttention, self).__init__()
+        super(BaseAttention, self).__init__()
         self.scale = scale
-        self.mask_flag = mask_flag
         self.output_attention = output_attention
         self.dropout = nn.Dropout(attention_dropout)
+        self.mask_flag = mask_flag
+
+    # -------- ABSTRACT METHODS -------- #
+    def compute_scores(
+        self,
+        queries: torch.Tensor,
+        keys: torch.Tensor,
+        pos_bias: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Return attention scores of shape (B, H, L, S).
+
+        Parameters
+        ----------
+        queries : torch.Tensor
+            Query tensor of shape (B, L, H, E).
+        keys : torch.Tensor
+            Key tensor of shape (B, S, H, E).
+        pos_bias : Optional[torch.Tensor], optional
+            Positional bias tensor of shape (B, H, L, S), by default None
+        """
+        raise NotImplementedError
+
+    def combine_values(self, attn: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
+        """
+        Return output of shape (B, L, H, D).
+
+        Parameters
+        ----------
+        attn : torch.Tensor
+            Attention weights of shape (B, H, L, S).
+        values : torch.Tensor
+            Value tensor of shape (B, S, H, D).
+        """
+        raise NotImplementedError
 
     def forward(
         self,
         queries: torch.Tensor,
         keys: torch.Tensor,
         values: torch.Tensor,
+        pos_bias: Optional[torch.Tensor] = None,
         attn_mask: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
-
+        """
+        Perform the forward pass of the attention mechanism.
+        """
         B, L, H, E = queries.shape
         _, S, _, D = values.shape
         scale = self.scale or 1.0 / sqrt(E)
 
-        scores = torch.einsum("blhe,bshe->bhls", queries, keys)
+        scores = self.compute_scores(queries, keys, pos_bias)
 
         if self.mask_flag:
             if attn_mask is None:
@@ -40,7 +82,7 @@ class FullAttention(nn.Module):
             scores.masked_fill_(attn_mask.mask, -float("inf"))
 
         A = self.dropout(torch.softmax(scale * scores, dim=-1))
-        V = torch.einsum("bhls,bshd->blhd", A, values)
+        V = self.combine_values(A, values)
 
         if self.output_attention:
             return V.contiguous(), A
@@ -48,16 +90,62 @@ class FullAttention(nn.Module):
             return V.contiguous(), None
 
 
+class FullAttention(BaseAttention):
+    """
+    A full attention mechanism that computes attention scores using dot product and applies optional positional bias.
+    """
+
+    def compute_scores(
+        self,
+        queries: torch.Tensor,
+        keys: torch.Tensor,
+        pos_bias: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Compute attention scores using dot product and apply optional positional bias.
+        """
+        scores = torch.einsum("blhe,bshe->bhls", queries, keys)
+        if pos_bias is not None:
+            scores = scores + pos_bias
+        return scores
+
+    def combine_values(self, attn: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
+        """
+        Combine attention weights with values to produce the output.
+        """
+        return torch.einsum("bhls,bshd->blhd", attn, values)
+
+
 class AttentionLayer(nn.Module):
+    """
+    Implementation of a multi-head attention layer.
+    """
+
     def __init__(
         self,
-        attention: nn.Module,
+        attention: BaseAttention,
         d_model: int,
         n_heads: int,
         d_keys: Optional[int] = None,
         d_values: Optional[int] = None,
     ):
+        """
+        Initialize the multi-head attention layer.
 
+        Parameters
+        ----------
+        attention : BaseAttention
+            An instance of a BaseAttention subclass to perform the attention mechanism.
+        d_model : int
+            The dimensionality of the input and output feature vectors.
+        n_heads : int
+            The number of attention heads.
+        d_keys : Optional[int], optional
+            The dimensionality of the key and query vectors per head. If None, defaults to d_model // n_heads.
+        d_values : Optional[int], optional
+            The dimensionality of the value vectors per head. If None, defaults to d_model // n_heads.
+
+        """
         super(AttentionLayer, self).__init__()
 
         d_keys = d_keys or (d_model // n_heads)
@@ -76,8 +164,11 @@ class AttentionLayer(nn.Module):
         keys: torch.Tensor,
         values: torch.Tensor,
         attn_mask: Optional[torch.Tensor] = None,
+        pos_bias: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
-
+        """
+        Perform the forward pass of the multi-head attention layer.
+        """
         B, L, _ = queries.shape
         _, S, _ = keys.shape
         H = self.n_heads
@@ -86,11 +177,15 @@ class AttentionLayer(nn.Module):
         keys = self.key_projection(keys).view(B, S, H, -1)
         values = self.value_projection(values).view(B, S, H, -1)
 
+        if pos_bias is not None:
+            pos_bias = pos_bias.unsqueeze(1).expand(B, H, L, S)
+
         out, attn = self.inner_attention(
             queries,
             keys,
             values,
-            attn_mask,
+            pos_bias=pos_bias,
+            attn_mask=attn_mask,
         )
         out = out.view(B, L, -1)
 
