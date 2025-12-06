@@ -4,12 +4,18 @@ from base.scaler import BaseScaler
 
 
 class MinMaxScaler(BaseScaler):
+    """
+    Implementation of Min-Max scaling for tensors in the same way as in sklearn.
+    """
+
     def __init__(
         self,
         mode: Literal["feature", "global"] = "feature",
         feature_range: Tuple[float, float] = (0, 1),
     ):
         """
+        Initialize the MinMaxScaler.
+
         Parameters
         ----------
         mode : Literal["feature", "global"], default="feature"
@@ -30,6 +36,19 @@ class MinMaxScaler(BaseScaler):
         self.register_buffer("min_shift_", None)
 
     def fit(self, tensor: torch.Tensor) -> "MinMaxScaler":
+        """
+        Fit the scaler to the data. This computes and stores `data_min_`, `data_max_`, `scale_`, and `min_shift_`.
+
+        Parameters
+        ----------
+        tensor : torch.Tensor
+            Input tensor to fit the scaler.
+
+        Returns
+        -------
+        MinMaxScaler
+            Fitted scaler instance.
+        """
         if self.mode == "feature":
             dims = list(range(tensor.dim() - 1))
             data_min = tensor.amin(dim=dims, keepdim=True)
@@ -53,11 +72,37 @@ class MinMaxScaler(BaseScaler):
         return self
 
     def transform(self, tensor: torch.Tensor) -> torch.Tensor:
+        """
+        Transform the input tensor using the fitted scaler parameters.
+
+        Parameters
+        ----------
+        tensor : torch.Tensor
+            Input tensor to be transformed.
+
+        Returns
+        -------
+        torch.Tensor
+            Transformed tensor.
+        """
         if self.scale_ is None:
             raise RuntimeError("Must fit scaler before transform()")
         return tensor * self.scale_ + self.min_shift_
 
     def inverse_transform(self, tensor: torch.Tensor) -> torch.Tensor:
+        """
+        Inverse transform the scaled tensor back to the original scale.
+
+        Parameters
+        ----------
+        tensor : torch.Tensor
+            Scaled tensor to be inverse transformed.
+
+        Returns
+        -------
+        torch.Tensor
+            Tensor transformed back to the original scale.
+        """
         if self.scale_ is None:
             raise RuntimeError("Must fit scaler before inverse_transform()")
         return (tensor - self.min_shift_) / self.scale_
