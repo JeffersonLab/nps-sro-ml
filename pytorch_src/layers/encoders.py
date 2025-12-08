@@ -71,6 +71,7 @@ class BaseEncoderLayer(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
+        *,
         pos_bias: torch.Tensor = None,
         attn_mask: torch.Tensor = None,
     ) -> tuple[torch.Tensor, torch.Tensor] | torch.Tensor:
@@ -91,7 +92,7 @@ class BaseEncoderLayer(nn.Module):
         tuple[torch.Tensor, torch.Tensor] | torch.Tensor
             If `return_attn` is True, returns a tuple containing the output tensor and the attention weights tensor. Otherwise, returns only the output tensor.
         """
-        x_new, attn = self.attn_layer(x, x, x, pos_bias, attn_mask)
+        x_new, attn = self.attn_layer(x, x, x, pos_bias=pos_bias, attn_mask=attn_mask)
 
         if self.batchnorm:
             x = (x + self.dropout(x_new)).transpose(1, 2)
@@ -173,7 +174,7 @@ class Encoder(nn.Module):
         """
         attns = []
         for enc in self.encoders:
-            x, attn = enc(x, pos_bias, attn_mask)
+            x, attn = enc(x, pos_bias=pos_bias, attn_mask=attn_mask)
             attns.append(attn)
 
         if self.return_attn:
