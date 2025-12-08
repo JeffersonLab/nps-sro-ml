@@ -8,9 +8,14 @@ from typing import Optional, List, Any, Tuple
 from collections import OrderedDict
 
 
-def prepare_device(n_gpu_use: int):
+def prepare_device(n_gpu_use: int) -> Tuple[torch.device, List[int]]:
     """
-    setup GPU device if available. get gpu device indices which are used for DataParallel
+    Prepare for GPU device if available and get gpu device indices which are used for DataParallel.
+
+    Parameters
+    ----------
+    n_gpu_use : int
+        Number of GPUs to use.
     """
     if n_gpu_use < 0:
         raise ValueError("n_gpu_use must be non-negative")
@@ -36,8 +41,12 @@ def prepare_device(n_gpu_use: int):
 def load_json(fname: str | pathlib.Path) -> OrderedDict:
     """
     Load JSON file and return as an OrderedDict.
+
+    Parameters
+    ----------
     fname : str | pathlib.Path
         Path to the JSON file.
+
     Returns
     -------
     OrderedDict
@@ -51,6 +60,9 @@ def load_json(fname: str | pathlib.Path) -> OrderedDict:
 def write_json(content: dict, fname: str | pathlib.Path):
     """
     Write a dictionary to a JSON file.
+
+    Parameters
+    ----------
     content : dict
         Dictionary to write to the JSON file.
     fname : str | pathlib.Path
@@ -66,16 +78,19 @@ def import_attr(
 ) -> Tuple[Any, str]:
     """
     Dynamically import an attribute (class, function, variable) from a list of available modules. By default, returns the first successfully imported attribute. If the attribute is not found in any of the provided modules, raises an ImportError with detailed information about the attempts.
+
     Parameters
     ----------
     attr_name : str
         Name of the attribute to import.
     avail_modules : List[str] | str
         List of module names (as strings) to search for the attribute.
+
     Returns
     -------
     Tuple[Any, str]
         The imported attribute and module name.
+
     Raises
     ------
     ImportError
@@ -86,7 +101,6 @@ def import_attr(
     assert attr.__name__ == "Path"
     assert mod_name == "pathlib"
     """
-
     if isinstance(avail_modules, str):
         avail_modules = [avail_modules]
 
@@ -129,6 +143,7 @@ def get_logger(
 ) -> logging.Logger:
     """
     Create and configure a logger.
+
     Parameters
     ----------
     name : str
@@ -141,6 +156,7 @@ def get_logger(
         Format of the date in log messages (default is "%Y-%m-%d %H:%M:%S").
     file : str | None, optional
         If provided, log messages will be written to this file. If None, logs will be printed to console.
+
     Returns
     -------
     logging.Logger

@@ -17,6 +17,8 @@ class TensorboardWriter:
         avail_modules: list[str] = ["torch.utils.tensorboard", "tensorboardX"],
     ):
         """
+        Initialize the Tensorboard SummaryWriter.
+
         Parameters
         ----------
         log_dir : str | pathlib.Path
@@ -26,7 +28,6 @@ class TensorboardWriter:
         avail_modules : list of str
             List of module names to try importing SummaryWriter from. Default includes 'torch.utils.tensorboard' and 'tensorboardX'.
         """
-
         self.logger = logger if logger is not None else get_logger("TensorboardWriter")
         try:
             self.writer, self.selected_module = import_attr(
@@ -59,7 +60,8 @@ class TensorboardWriter:
 
     def set_step(self, step, mode="train"):
         """
-        Sets the step for the next visualization
+        Set step for the next visualization.
+
         Parameters
         ----------
         step : int
@@ -80,10 +82,13 @@ class TensorboardWriter:
 
     def __getattr__(self, name):
         """
+        Get the Tensorboard SummaryWriter method with additional information (step, tag) added.
+
         Parameters
         ----------
         name : str
             Name of the SummaryWriter method to call
+
         Returns
         -------
             add_data() methods of tensorboard with additional information (step, tag) added. if `name` not found in `self.tb_writer_ftns`, return a blank function handle that does nothing
@@ -108,19 +113,31 @@ class TensorboardWriter:
         )
 
     def __enter__(self):
+        """
+        Context manager enter method to return the Tensorboard SummaryWriter.
+        """
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
+        """
+        Context manager exit method to flush and close the Tensorboard SummaryWriter.
+        """
         self.flush()
         self.close()
         return False
 
     def flush(self):
+        """
+        Flush the Tensorboard SummaryWriter.
+        """
         if self.writer is not None:
             self.logger.info("Flushing Tensorboard writer...")
             self.writer.flush()
 
     def close(self):
+        """
+        Close the Tensorboard SummaryWriter.
+        """
         if self.writer is not None:
             self.logger.info("Closing Tensorboard writer...")
             self.writer.close()
