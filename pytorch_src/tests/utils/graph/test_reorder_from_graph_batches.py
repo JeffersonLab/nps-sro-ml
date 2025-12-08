@@ -77,9 +77,12 @@ def test_reorder_from_graph_batches_roundtrip():
         [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0], [9.0, 10.0]]
     )
 
-    x_graph, idx_out = pack_to_graph_batches(x_original, batch)
+    x_graph, idx_out, mask_out = pack_to_graph_batches(x_original, batch)
     x_recovered = reorder_from_graph_batches(x_graph, idx_out)
 
     assert torch.allclose(
         x_recovered, x_original
     ), f"Roundtrip failed. Expected {x_original}, got {x_recovered}"
+    assert (
+        mask_out.shape[0] == x_graph.shape[0]
+    ), f"Batch size mismatch between mask and x_graph"
