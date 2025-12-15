@@ -37,13 +37,13 @@ def oc_loss_per_batch(
         Margin distance for repulsive potential, by default 1.0. Only points within this distance contribute to the loss.
     batch : Optional[torch.Tensor], optional
         Graph indices for each node, by default None. If None, all nodes are considered to belong to a single graph.
+
     Returns
     -------
     tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
         Attractive potential loss, repulsive potential loss, cowardice penalty loss, noise penalty loss.
 
     """
-
     # TODO : construct unique object IDs across batch, except for background
 
     attr_loss = oc_attr_loss_per_batch(x, beta, object_id, q_min, noise_idx, batch)
@@ -80,12 +80,12 @@ def oc_attr_loss_per_batch(
         Index or list of indices representing noise/background points in object_id, by default 0.
     batch : Optional[torch.Tensor], optional
         Graph indices for each node, by default None. If None, all nodes are considered to belong to a single graph.
+
     Returns
     -------
     torch.Tensor
         Attractive potential loss.
     """
-
     if batch is None:
         batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
 
@@ -118,10 +118,11 @@ def oc_attr_loss_per_batch(
         v_attr[attr_mask], batch_idx[attr_mask], dim_size=batch.unique().size(0)
     )
 
-    # number of objects in each graph
+    # number of objects (excluding singletons) in each graph
     # the order is automatically aligned with l_attr since the same `batch` is used
+    large_obj = (obj_sizes > 1).float()
     n_obj_per_graph = scatter_add(
-        torch.ones_like(q_repr), batch[id_repr], dim_size=batch.unique().size(0)
+        large_obj, batch[id_repr], dim_size=batch.unique().size(0)
     )
     return (l_attr / n_obj_per_graph.clamp(min=1)).sum()
 
@@ -154,12 +155,12 @@ def oc_repul_loss_per_batch(
         Margin distance for repulsive potential, by default 1.0. Only points within this distance contribute to the loss.
     batch : Optional[torch.Tensor], optional
         Graph indices for each node, by default None. If None, all nodes are considered to belong to a single graph.
+
     Returns
     -------
     torch.Tensor
         Repulsive potential loss.
     """
-
     if batch is None:
         batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
 
@@ -225,6 +226,7 @@ def oc_coward_loss_per_batch(
         Index or list of indices representing noise/background points in object_id, by default 0.
     batch : Optional[torch.Tensor], optional
         Graph indices for each node, by default None. If None, all nodes are considered to belong to a single graph.
+
     Returns
     -------
     torch.Tensor
@@ -277,12 +279,12 @@ def oc_noise_loss_per_batch(
         Index or list of indices representing noise/background points in object_id, by default 0.
     batch : Optional[torch.Tensor], optional
         Graph indices for each node, by default None. If None, all nodes are considered to belong to a single graph.
+
     Returns
     -------
     torch.Tensor
         Noise penalty loss.
     """
-
     if batch is None:
         batch = torch.zeros(beta.size(0), dtype=torch.long, device=beta.device)
 
@@ -321,6 +323,7 @@ def oc_attr_loss_per_graph(
         Minimum charge value to ensure numerical stability, by default 0.1.
     noise_idx : int | list[int], optional
         Index or list of indices representing noise/background points in object_id, by default 0.
+
     Returns
     -------
     torch.Tensor
@@ -346,7 +349,13 @@ def oc_attr_loss_per_graph(
     q_jk = q_jk / obj_sizes  # normalize by object size
 
     loss = (q_jk * torch.square(dist_jk))[attr_mask].sum()
-    return loss / (len(unique_obj_ids) if len(unique_obj_ids) > 0 else 1)
+
+    large_obj_mask = obj_sizes > 1
+    loss = loss / large_obj_mask.sum().clamp(
+        min=1
+    )  # average over number of large objects
+    return loss
+    # return loss / (len(unique_obj_ids) if len(unique_obj_ids) > 0 else 1)
 
 
 def oc_repul_loss_per_graph(
@@ -374,6 +383,7 @@ def oc_repul_loss_per_graph(
         Index or list of indices representing noise/background points in object_id, by default 0.
     margin : float, optional
         Margin distance for repulsive potential, by default 1.0. Only points within this distance contribute to the loss.
+
     Returns
     -------
     torch.Tensor
@@ -497,12 +507,12 @@ def oc_attr_loss_per_graph_naive(
         Minimum charge value to ensure numerical stability, by default 0.1.
     noise_idx : int | list[int], optional
         Index or list of indices representing noise/background points in object_id, by default 0.
+
     Returns
     -------
     torch.Tensor
         Attractive potential loss.
     """
-
     if x.requires_grad:
         raise RuntimeError(
             "This is a naive implementation for testing only. Do not use in backpropagation of gradients."
@@ -520,16 +530,19 @@ def oc_attr_loss_per_graph_naive(
     if len(unique_obj_ids) == 0:
         return loss
 
+    large_obj_count = 0
     for obj in unique_obj_ids:
         mask = object_id == obj
         x_obj, q_obj = x[mask], q[mask]
         cid = q_obj.argmax()
         x_repr, q_repr = x_obj[cid], q_obj[cid]
         obj_size = torch.sum(mask).clamp(min=1)
+        if obj_size > 1:
+            large_obj_count += 1
         dist = torch.cdist(x_obj, x_repr.unsqueeze(0), p=2).squeeze()
         loss += torch.sum(q_obj * q_repr * torch.square(dist)) / obj_size
 
-    return loss / len(unique_obj_ids)
+    return loss / large_obj_count if large_obj_count > 0 else loss
 
 
 def oc_repul_loss_per_graph_naive(
@@ -563,7 +576,6 @@ def oc_repul_loss_per_graph_naive(
     torch.Tensor
         Repulsive potential loss.
     """
-
     if x.requires_grad:
         raise RuntimeError(
             "This is a naive implementation for testing only. Do not use in backpropagation of gradients."
