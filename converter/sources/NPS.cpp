@@ -61,6 +61,19 @@ int Geometry::getSlotFromBlock(int block) const {
 	return it->second.slot;
 }
 
+bool Geometry::isNeighbour(int ch1, int ch2) const {
+	auto [col1, row1] = getColRowFromBlock(ch1);
+	auto [col2, row2] = getColRowFromBlock(ch2);
+	return (std::abs(col1 - col2) <= 1) && (std::abs(row1 - row2) <= 1) && !(col1 == col2 && row1 == row2);
+}
+
+bool Geometry::isInsideGrid(int seedChannel, int channel, int gridSize) const {
+	auto [seedCol, seedRow] = getColRowFromBlock(seedChannel);
+	auto [chCol, chRow] = getColRowFromBlock(channel);
+	int halfGrid = gridSize / 2;
+	return (std::abs(seedCol - chCol) <= halfGrid) && (std::abs(seedRow - chRow) <= halfGrid);
+}
+
 void setBranchAddresses(TChain *&chain, npsBranches &buffer) {
 
 	// Global branches

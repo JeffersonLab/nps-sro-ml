@@ -44,6 +44,10 @@ public:
 	int getCrateFromBlock(int block) const;
 	int getSlotFromBlock(int block) const;
 
+	bool isNeighbour(int ch1, int ch2) const;
+
+	bool isInsideGrid(int seedChannel, int channel, int gridSize) const;
+
 private:
 	std::vector<BlockInfo> mBlocks;				  // index-based lookup
 	std::unordered_map<int, BlockInfo> mIndexMap; // block -> info
