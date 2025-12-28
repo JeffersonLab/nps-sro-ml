@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <ios>
 #include <iostream>
 #include <map>
@@ -19,6 +20,12 @@ struct GraphData {
 	std::vector<std::vector<int>> edgeIndex;			 // [2][num_edges]
 	std::vector<std::vector<int>> edgeTargetIndex;		 // [2][num_target_edges]
 };
+
+namespace GraphUtils {
+int countNodes(const std::vector<std::vector<int>> &edgeIndex);
+int getLargestNodeId(const std::vector<std::vector<int>> &edgeIndex);
+std::unordered_map<int, std::vector<int>> buildAdjacencyList(const std::vector<std::vector<int>> &edgeIndex);
+std::vector<std::vector<int>> getConnectedComponents(const std::vector<std::vector<int>> &edgeIndex);
 
 class GraphBuilder {
 public:
@@ -81,5 +88,6 @@ private:
 inline bool GraphBuilder::isDirected() const noexcept { return mDirected; }
 inline bool GraphBuilder::hasSelfLoops() const noexcept { return mIncludeSelfLoops; }
 inline bool GraphBuilder::isBuilt() const noexcept { return mBuilt; }
+}; // namespace GraphUtils
 
 #endif // GRAPH_HH
