@@ -6,12 +6,11 @@ fADC250::fADC250(int channels, const std::string &configFile) :
 	mPedestalSamples(4),
 	mMaxPulse(4),
 	mNSAT(2) {
+	resetEvent();
 	resetConfig();
 	if (!configFile.empty()) {
 		loadConfig(configFile);
 	}
-	mPulseTimes.resize(mChannels);
-	mPulseEnergies.resize(mChannels);
 }
 
 fADC250::~fADC250() {
@@ -19,16 +18,19 @@ fADC250::~fADC250() {
 }
 
 void fADC250::resetConfig() {
-	// default configuration according to "https://hallcweb.jlab.org/wiki/images/b/b3/NPS_VTP_DAQ.pdf"
-	mChannelThresholds.resize(mChannels, 10.0);
-	mChannelGains.resize(mChannels, 1.0);
-	mChannelPedestals.resize(mChannels, 0.0);
-	mChannelNSAs.resize(mChannels, 4); // n samples before the pulse crossing threshold
-	mChannelNSBs.resize(mChannels, 9); // n samples after the pulse crossing threshold
+	mConfig.thr.resize(mChannels, mDefaultChannelThresholds);
+	mConfig.gain.resize(mChannels, mDefaultChannelGains);
+	mConfig.ped.resize(mChannels, mDefaultChannelPedestals);
+	mConfig.nsa.resize(mChannels, mDefaultChannelNSAs);
+	mConfig.nsb.resize(mChannels, mDefaultChannelNSBs);
+	mClockCycles = mDefaultClockCycles;
+}
 
-	// ensure no more than 1 pulse every 32ns can be reported (this is a bandwidth limit on the communication link from
-	// FADC -> VTP) see the VTP manual section 9.2.1 for details
-	mClockCycles = 7;
+void fADC250::resetEvent() {
+	mEvent.nhits = 0;
+	mEvent.times.clear();
+	mEvent.energies.clear();
+	mEvent.channels.clear();
 }
 
 bool fADC250::loadConfig(const std::string &filename) {
@@ -60,7 +62,7 @@ bool fADC250::loadConfig(const std::string &filename) {
 		auto FADC250_ALLCH_GAIN = std::stod(row_data[22]);			// ADC * GAIN --> MeV
 		auto FADC250_NSA = std::stod(row_data[6]) / mTimePerSample; // timestamp unit
 		auto FADC250_NSB = std::stod(row_data[7]) / mTimePerSample; // timestamp unit
-		auto FADC250_ALLCH_PED = std::stod(row_data[19]);			// mV
+		auto FADC250_ALLCH_PED = std::stod(row_data[19]);			// ADC unit
 
 		if (channel < 0 || channel >= mChannels) {
 			std::cerr << "Error: Channel number " << channel << " out of range in configuration file." << std::endl;
@@ -74,58 +76,60 @@ bool fADC250::loadConfig(const std::string &filename) {
 		}
 
 		channel_set[channel] = true;
-		mChannelThresholds[channel] = FADC250_ALLCH_TET;
-		mChannelGains[channel] = FADC250_ALLCH_GAIN;
-		mChannelNSAs[channel] = static_cast<int>(FADC250_NSA);
-		mChannelNSBs[channel] = static_cast<int>(FADC250_NSB);
-		mChannelPedestals[channel] = FADC250_ALLCH_PED;
+		mConfig.thr[channel] = FADC250_ALLCH_TET;
+		mConfig.gain[channel] = FADC250_ALLCH_GAIN;
+		mConfig.nsa[channel] = static_cast<int>(FADC250_NSA);
+		mConfig.nsb[channel] = static_cast<int>(FADC250_NSB);
+		mConfig.ped[channel] = FADC250_ALLCH_PED;
 	}
 
 	if (std::accumulate(channel_set.begin(), channel_set.end(), 0) != mChannels) {
 		std::cerr
 			<< "Warning: Not all channels were set in the configuration file. Using default values for unset channels."
 			<< std::endl;
+		resetConfig();
 	}
 	configFile.close();
 	return true;
 }
 
-void fADC250::readWaveform(
-	const std::vector<double> &waveform, int channel, double ped_per_samp, bool usePedestal, bool debounce
-) {
-	std::vector<double> waveform_adc = waveform;
+void fADC250::processRawWaveform(const std::vector<double> &waveform, int channel, bool debounce) {
 
-	if (usePedestal) {
-		for (auto &sample : waveform_adc) {
-			sample += ped_per_samp * mPedestalSamples;
-			sample -= mChannelPedestals[channel];
-		}
+	auto ped = mConfig.ped[channel];
+	auto thr = mConfig.thr[channel];
+
+	std::vector<double> waveform_ = waveform;
+	for (auto &sample : waveform_) {
+		sample -= ped;
 	}
 
-	for (auto &sample : waveform_adc) {
-		sample /= GetAdcTomV();
-	}
+	auto pulses = findPulses(waveform_, thr, debounce);
 
-	auto pulses = findPulses(waveform_adc, channel, debounce);
+	mEvent.nhits += pulses.size();
+
 	for (const auto &p : pulses) {
-		auto charge = integrateCharge(waveform_adc, channel, p);
-		mPulseTimes[channel].push_back(p);
-		mPulseEnergies[channel].push_back(charge);
+		auto charge = integrateCharge(waveform_, channel, p);
+		mEvent.times.push_back(p);
+		mEvent.energies.push_back(charge);
+		mEvent.channels.push_back(channel);
 	}
 	return;
 }
 
-std::vector<int> fADC250::findPulses(const std::vector<double> &waveform_adc, int channel, bool debounce) const {
-	if (debounce) {
-		return findPulsesDebounce(waveform_adc, channel);
-	} else {
-		return findPulsesNaive(waveform_adc, channel);
+std::vector<int> fADC250::findPulses(const std::vector<double> &waveform_adc, double thr, int opt) const {
+	switch (opt) {
+	case 0:
+		return findPulseBR(waveform_adc, thr);
+	case 1:
+		return findPulsesDebounce(waveform_adc, thr);
+	case 2:
+		return findPulsesNaive(waveform_adc, thr);
+	default:
+		throw std::invalid_argument("Invalid option for findPulses");
 	}
 }
 
-std::vector<int> fADC250::findPulsesDebounce(const std::vector<double> &waveform_adc, int channel) const {
-
-	auto thres = mChannelThresholds[channel];
+std::vector<int> fADC250::findPulsesDebounce(const std::vector<double> &waveform_adc, double thr) const {
 
 	std::vector<int> res;
 	bool prev_above = false; // debounce
@@ -134,7 +138,7 @@ std::vector<int> fADC250::findPulsesDebounce(const std::vector<double> &waveform
 
 	while (ns < (int)waveform_adc.size() && npulse < mMaxPulse) {
 		if (prev_above) {
-			if (waveform_adc[ns] < thres) {
+			if (waveform_adc[ns] < thr) {
 				prev_above = false;
 			}
 			ns++;
@@ -144,7 +148,7 @@ std::vector<int> fADC250::findPulsesDebounce(const std::vector<double> &waveform
 		// Check mNSAT consecutive samples above threshold
 		int n_above = 0;
 		for (int k = 0; k < mNSAT && (ns + k) < (int)waveform_adc.size(); k++) {
-			if (waveform_adc[ns + k] >= thres) {
+			if (waveform_adc[ns + k] >= thr) {
 				n_above++;
 			}
 		}
@@ -163,15 +167,33 @@ std::vector<int> fADC250::findPulsesDebounce(const std::vector<double> &waveform
 	return res;
 }
 
-std::vector<int> fADC250::findPulsesNaive(const std::vector<double> &waveform_adc, int channel) const {
+std::vector<int> fADC250::findPulseBR(const std::vector<double> &waveform_adc, double thr) const {
 
-	auto threshold = mChannelThresholds[channel];
+	int current_over, last_over = 0;
+	std::vector<int> res;
+	for (int i = 0; i < (int)waveform_adc.size(); ++i) {
+
+		if (waveform_adc[i] > thr) {
+			current_over = 1;
+		} else {
+			current_over = 0;
+		}
+
+		if (current_over && !last_over) {
+			res.push_back(i);
+		}
+		last_over = current_over;
+	}
+	return res;
+}
+
+std::vector<int> fADC250::findPulsesNaive(const std::vector<double> &waveform_adc, double thr) const {
 
 	std::vector<int> res; // valid indices where threshold crossing occurred
 	int lastPulseIndex = -mClockCycles;
 	for (int i = 0; i < (int)waveform_adc.size(); ++i) {
 
-		auto is_crossed = waveform_adc[i] >= threshold;
+		auto is_crossed = waveform_adc[i] >= thr;
 
 		if (is_crossed && i - lastPulseIndex >= mClockCycles) {
 			res.push_back(i);
@@ -183,9 +205,9 @@ std::vector<int> fADC250::findPulsesNaive(const std::vector<double> &waveform_ad
 
 double fADC250::integrateCharge(const std::vector<double> &waveform_adc, int channel, int pulseIndex) const {
 
-	auto nsa = mChannelNSAs[channel];
-	auto nsb = mChannelNSBs[channel];
-	auto gain = mChannelGains[channel];
+	auto nsa = mConfig.nsa[channel];
+	auto nsb = mConfig.nsb[channel];
+	auto gain = mConfig.gain[channel];
 
 	int startIndex = pulseIndex - nsb;
 	int endIndex = pulseIndex + nsa - 1;
@@ -199,29 +221,33 @@ double fADC250::integrateCharge(const std::vector<double> &waveform_adc, int cha
 	}
 
 	auto integral = std::accumulate(waveform_adc.begin() + startIndex, waveform_adc.begin() + endIndex + 1, 0.0);
+
 	// GAIN is setup such that GAIN * adc unit --> MeV.
 	// NOTE from Ben : gain precision is up to 0.004, will have adjust the value from config file
-	return integral * gain;
+	// return integral * gain;
+	auto e = integral * gain;
+
+	// hardware clip to 13 bits
+	if (e < 0) {
+		e = 0;
+	}
+	if (e > 8191) {
+		e = 8191;
+	}
+	return e;
 }
 
 void fADC250::printConfig() const {
 	std::cout << "FADC250 Configuration:" << std::endl;
 	for (int channel = 0; channel < mChannels; ++channel) {
 		std::cout << "Channel " << channel << ": "
-				  << "Threshold = " << mChannelThresholds[channel] << ", "
-				  << "Gain = " << mChannelGains[channel] << ", "
-				  << "Pedestal = " << mChannelPedestals[channel] << ", "
-				  << "NSA = " << mChannelNSAs[channel] << ", "
-				  << "NSB = " << mChannelNSBs[channel] << std::endl;
+				  << "Threshold = " << mConfig.thr[channel] << ", "
+				  << "Gain = " << mConfig.gain[channel] << ", "
+				  << "Pedestal = " << mConfig.ped[channel] << ", "
+				  << "NSA = " << mConfig.nsa[channel] << ", "
+				  << "NSB = " << mConfig.nsb[channel] << std::endl;
 	}
 	return;
-}
-
-void fADC250::reset() {
-	mPulseTimes.clear();
-	mPulseEnergies.clear();
-	mPulseTimes.resize(mChannels);
-	mPulseEnergies.resize(mChannels);
 }
 
 constexpr double fADC250::GetAdcTomV() {
