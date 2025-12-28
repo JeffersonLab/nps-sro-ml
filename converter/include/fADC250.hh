@@ -51,7 +51,7 @@ private:
 
 	int mClockCycles; // No threshold crossing occurred in the past n clock cycles
 
-	std::vector<int> findPulses(const std::vector<double> &waveform_adc, double thr, bool debounce) const;
+	std::vector<int> findPulses(const std::vector<double> &waveform_adc, double thr, int opt) const;
 	std::vector<int> findPulseBR(const std::vector<double> &waveform_adc, double thr) const;
 	std::vector<int> findPulsesNaive(const std::vector<double> &waveform_adc, double thr) const;
 	std::vector<int> findPulsesDebounce(const std::vector<double> &waveform_adc, double thr) const;
