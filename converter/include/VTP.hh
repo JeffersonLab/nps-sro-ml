@@ -8,63 +8,91 @@
 #include <numeric>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
+
+typedef struct {
+	std::vector<int> firmware_type;
+	std::vector<int> firmware_ver;
+	std::vector<int> offset;
+	std::vector<int> width;
+
+	struct {
+		// Clustering Config
+		std::vector<int> cluster_hit_dt;
+		std::vector<int> cluster_seed_thr;
+		std::vector<int> cluster_nhits_min;
+		std::vector<int> cluster_readout_thr;
+		std::vector<int> cluster_trigger_thr;
+		std::vector<int> cluster_pair_trigger_thr;
+		std::vector<int> cluster_pair_trigger_width;
+		std::vector<int> fadcmask_mode;
+	} nps;
+
+} vtp_cfg;
+
+typedef struct {
+	int nseeds;
+	std::vector<int> clus_sizes;			   // [nseeds]
+	std::vector<std::vector<int>> channels;	   // [nseeds][blocks_in_cluster]
+	std::vector<std::vector<int>> times;	   // [nseeds][blocks_in_cluster]
+	std::vector<std::vector<double>> energies; // [nseeds][blocks_in_cluster]
+
+	std::vector<bool> trigger0; // [nseeds]
+	std::vector<bool> trigger1; // [nseeds]
+	std::vector<bool> trigger2; // [nseeds]
+	std::vector<bool> trigger3; // [nseeds]
+	std::vector<bool> trigger4; // [nseeds]
+	std::vector<bool> trigger5; // [nseeds]
+
+	void clear();
+
+} vtp_reco_evt;
 
 class VTP {
 public:
-	VTP(int nTime, double deltaT, const std::string &configFile = "");
+	VTP(int nChannels, int ntime, double deltaT);
+	VTP(int nChannels, int ntime, double deltaT, const std::string &configFile);
 	~VTP();
 
 	bool loadConfig(const std::string &filename);
-	void resetConfig();
-	void resetArrays();
-
-	void
-	process(const std::vector<std::vector<double>> &triggerEnergies, const std::vector<std::vector<int>> &triggerTimes);
-
-	std::vector<bool> getTriggerType(const std::vector<double> &energies, const std::vector<bool> &hits);
 	void printConfig() const;
-	bool isTriggered() const;
+	void resetConfig();
+	void resetEvent();
 
-	const std::vector<bool> &getTriggeredBase() const { return mTriggeredBase; }
-	const std::vector<bool> &getTrigger0() const { return mTrigger0; }
-	const std::vector<bool> &getTrigger1() const { return mTrigger1; }
-	const std::vector<bool> &getTrigger2() const { return mTrigger2; }
-	const std::vector<bool> &getTrigger3() const { return mTrigger3; }
-	const std::vector<bool> &getTrigger4() const { return mTrigger4; }
-	const std::vector<bool> &getTrigger5() const { return mTrigger5; }
-	const std::vector<bool> &getTriggered() const { return mTriggered; }
-	const std::vector<double> &getTriggerTimes() const { return mTriggerTimes; }
+	void process(
+		int seedChannel, int seedTime, double seedE, const std::vector<int> &gridChannels,
+		const std::vector<int> &gridTimes, const std::vector<double> &gridEnergies
+	);
+
+	const vtp_reco_evt &getEvent() const { return mEvent; }
 
 private:
+	int mNChannels;
 	int mNTime;
 	double mDeltaT;
-	int mTimeWindowBins;
 
-	double mSeedThreshold;	 // VTP_NPS_ECALCLUSTER_SEED_THR;
-	double mHitTimingWindow; // VTP_NPS_ECALCLUSTER_HIT_DT;
-	int mMinHits;			 // VTP_NPS_ECALCLUSTER_NHIT_MIN;
+	vtp_cfg mConfig;
+	vtp_reco_evt mEvent;
 
-	double mClusterThreshold;	  // VTP_NPS_ECALCLUSTER_CLUSTER_TRIGGER_THR;
-	double mPairClusterThreshold; // VTP_NPS_ECALCLUSTER_CLUSTER_PAIR_TRIGGER_THR;
-	double mPairClusterWidth;	  // VTP_NPS_ECALCLUSTER_CLUSTER_PAIR_TRIGGER_WIDTH;
+protected:
+	// default configuration according to "https://hallcweb.jlab.org/wiki/images/b/b3/NPS_VTP_DAQ.pdf"
+
+	double mDefaultFAdcOffset = 4500; // FADC Lookback time from trigger in ns
+	double mDefaultFAdcWidth = 440;	  // Waveform readout window in ns
+	double mDefaultOffset = 4448;	  // VTP Lookback time time from trigger in ns
+	double mDefaultWidth = 1000;	  // Window width to find clusters in ns
+
+	double mDefaultSeedThreshold = 50.0;		 // Threshold for defining a cluster seed in MeV
+	double mDefaultHitTimingWindow = 20.0;		 // Coincidence window for cluster formation in ns
+	int mDefaultMinHits = 1;					 // Mininum # Hits to define cluster
+	double mDefaultClusterThreshold = 900.0;	 // Single-cluster validation threshold (Bit 0) MeV
+	double mDefaultPairClusterThreshold = 500.0; // Two-cluster validation threshold MeV
+	double mDefaultPairClusterWidth = 20.0;		 //  Output width of VTP Bit 4 ns
 
 	// for Sparisfication
-	int mReadoutMode;		  // VTP_NPS_ECALCLUSTER_FADCMASK_MODE;
-	double mReadoutThreshold; // VTP_NPS_ECALCLUSTER_CLUSTER_READOUT_THR;
-
-	// for storing result in the same event
-	std::vector<bool> mTriggeredBase;  // [nTimeWindowBins]
-	std::vector<bool> mTrigger0;	   // [nTimeWindowBins]
-	std::vector<bool> mTrigger1;	   // [nTimeWindowBins]
-	std::vector<bool> mTrigger2;	   // [nTimeWindowBins]
-	std::vector<bool> mTrigger3;	   // [nTimeWindowBins]
-	std::vector<bool> mTrigger4;	   // [nTimeWindowBins]
-	std::vector<bool> mTrigger5;	   // [nTimeWindowBins]
-	std::vector<bool> mTriggered;	   // [nTimeWindowBins]
-	std::vector<double> mTriggerTimes; // [nTimeWindowBins]
-
-	void calcTimeWindowBins(double dt);
+	int mDefaultReadoutMode = 7;			 // 0 for 5x5 or 1 for 7x7
+	double mDefaultReadoutThreshold = 100.0; //  Cluster threshold for readout in MeV
 };
 
 #endif // VTP_HH

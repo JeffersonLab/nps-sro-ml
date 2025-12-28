@@ -1,8 +1,14 @@
 #include "VTP.hh"
 
-VTP::VTP(int nTime, double deltaT, const std::string &configFile) : mNTime(nTime), mDeltaT(deltaT), mTimeWindowBins(1) {
+VTP::VTP(int nChannels, int ntime, double deltaT) : mNChannels(nChannels), mNTime(ntime), mDeltaT(deltaT) {
 	resetConfig();
-	resetArrays();
+}
+
+VTP::VTP(int nChannels, int ntime, double deltaT, const std::string &configFile) :
+	mNChannels(nChannels),
+	mNTime(ntime),
+	mDeltaT(deltaT) {
+	resetConfig();
 	if (!configFile.empty()) {
 		loadConfig(configFile);
 	}
@@ -24,201 +30,219 @@ bool VTP::loadConfig(const std::string &filename) {
 
 	std::vector<std::string> columns;
 	std::string column;
+
+	auto trim = [](std::string &s) {
+		s.erase(0, s.find_first_not_of(" \t\r\n"));
+		s.erase(s.find_last_not_of(" \t\r\n") + 1);
+	};
+
 	while (std::getline(ss, column, ',')) {
+		trim(column);
 		columns.push_back(column);
 	}
 
+	std::vector<std::string> required_fields = {
+		"channel",
+		"VTP_FIRMWARETYPE",
+		"VTP_FIRMWAREVERSION",
+		"VTP_W_OFFSET",
+		"VTP_W_WIDTH",
+		"VTP_NPS_ECALCLUSTER_HIT_DT",
+		"VTP_NPS_ECALCLUSTER_SEED_THR",
+		"VTP_NPS_ECALCLUSTER_NHIT_MIN",
+		"VTP_NPS_ECALCLUSTER_CLUSTER_READOUT_THR",
+		"VTP_NPS_ECALCLUSTER_CLUSTER_TRIGGER_THR",
+		"VTP_NPS_ECALCLUSTER_CLUSTER_PAIR_TRIGGER_THR",
+		"VTP_NPS_ECALCLUSTER_CLUSTER_PAIR_TRIGGER_WIDTH",
+		"VTP_NPS_ECALCLUSTER_FADCMASK_MODE"
+	};
+
+	for (const auto &field : required_fields) {
+		if (std::find(columns.begin(), columns.end(), field) == columns.end()) {
+			std::cerr << "Error: Required field " << field << " not found in VTP config file.\n";
+			return false;
+		}
+	}
+
+	std::unordered_map<std::string, size_t> col_idx;
+	for (size_t i = 0; i < columns.size(); ++i) {
+		col_idx[columns[i]] = i;
+	}
+
 	while (std::getline(configFile, line)) {
+
+		std::vector<std::string> values;
 		std::stringstream ss(line);
 		std::string value;
-		size_t i = 0;
 
-		while (std::getline(ss, value, ',') && i < columns.size()) {
-			const std::string &col = columns[i];
-
-			if (col == "VTP_NPS_ECALCLUSTER_SEED_THR")
-				mSeedThreshold = std::stod(value);
-			else if (col == "VTP_NPS_ECALCLUSTER_HIT_DT")
-				mHitTimingWindow = std::stod(value) * mDeltaT;
-			else if (col == "VTP_NPS_ECALCLUSTER_NHIT_MIN")
-				mMinHits = std::stoi(value);
-			else if (col == "VTP_NPS_ECALCLUSTER_CLUSTER_TRIGGER_THR")
-				mClusterThreshold = std::stod(value);
-			else if (col == "VTP_NPS_ECALCLUSTER_CLUSTER_PAIR_TRIGGER_THR")
-				mPairClusterThreshold = std::stod(value);
-			else if (col == "VTP_NPS_ECALCLUSTER_CLUSTER_PAIR_TRIGGER_WIDTH")
-				mPairClusterWidth = std::stod(value);
-			else if (col == "VTP_NPS_ECALCLUSTER_FADCMASK_MODE")
-				mReadoutMode = std::stoi(value);
-			else if (col == "VTP_NPS_ECALCLUSTER_CLUSTER_READOUT_THR")
-				mReadoutThreshold = std::stod(value);
-
-			++i;
+		while (std::getline(ss, value, ',')) {
+			values.push_back(value);
 		}
+
+		if (values.size() != columns.size()) {
+			std::cerr << "Column count mismatch\n";
+			continue;
+		}
+
+		int ch = std::stoi(values[col_idx["channel"]]);
+
+		if (ch < 0 || ch >= mNChannels) {
+			std::cerr << "Warning: Channel number " << ch << " out of range in VTP configuration file." << std::endl;
+			continue;
+		}
+
+		mConfig.firmware_type[ch] = std::stoi(values[col_idx["VTP_FIRMWARETYPE"]]);
+		mConfig.firmware_ver[ch] = std::stoi(values[col_idx["VTP_FIRMWAREVERSION"]]);
+		mConfig.offset[ch] = std::stoi(values[col_idx["VTP_W_OFFSET"]]);
+		mConfig.width[ch] = std::stoi(values[col_idx["VTP_W_WIDTH"]]);
+		mConfig.nps.cluster_hit_dt[ch] = std::stoi(values[col_idx["VTP_NPS_ECALCLUSTER_HIT_DT"]]) * mDeltaT;
+		mConfig.nps.cluster_seed_thr[ch] = std::stoi(values[col_idx["VTP_NPS_ECALCLUSTER_SEED_THR"]]);
+		mConfig.nps.cluster_nhits_min[ch] = std::stoi(values[col_idx["VTP_NPS_ECALCLUSTER_NHIT_MIN"]]);
+		mConfig.nps.cluster_readout_thr[ch] = std::stoi(values[col_idx["VTP_NPS_ECALCLUSTER_CLUSTER_READOUT_THR"]]);
+		mConfig.nps.cluster_trigger_thr[ch] = std::stoi(values[col_idx["VTP_NPS_ECALCLUSTER_CLUSTER_TRIGGER_THR"]]);
+		mConfig.nps.cluster_pair_trigger_thr[ch] =
+			std::stoi(values[col_idx["VTP_NPS_ECALCLUSTER_CLUSTER_PAIR_TRIGGER_THR"]]);
+		mConfig.nps.cluster_pair_trigger_width[ch] =
+			std::stoi(values[col_idx["VTP_NPS_ECALCLUSTER_CLUSTER_PAIR_TRIGGER_WIDTH"]]);
+		mConfig.nps.fadcmask_mode[ch] = std::stoi(values[col_idx["VTP_NPS_ECALCLUSTER_FADCMASK_MODE"]]);
 	}
 
 	configFile.close();
 
-	this->calcTimeWindowBins(mHitTimingWindow);
 	return true;
-}
-
-void VTP::calcTimeWindowBins(double dt) {
-	auto timeWindows = static_cast<double>(mNTime) * mDeltaT / dt;
-	if (std::floor(timeWindows) != timeWindows) {
-		throw std::runtime_error("Error: NTime * DeltaT is not divisible by HitTimingWindow.");
-	}
-	mTimeWindowBins = static_cast<int>(timeWindows);
-	return;
 }
 
 void VTP::resetConfig() {
 
-	// default configuration according to "https://hallcweb.jlab.org/wiki/images/b/b3/NPS_VTP_DAQ.pdf"
-	mSeedThreshold = 50.0;	 // MeV
-	mHitTimingWindow = 20.0; // ns
-	mMinHits = 1;
-	mClusterThreshold = 900.0;	   // MeV
-	mPairClusterThreshold = 500.0; // MeV
-	mPairClusterWidth = 20.0;	   // ns
+	mConfig.firmware_type.clear();
+	mConfig.firmware_ver.clear();
+	mConfig.offset.clear();
+	mConfig.width.clear();
+	mConfig.nps.cluster_hit_dt.clear();
+	mConfig.nps.cluster_seed_thr.clear();
+	mConfig.nps.cluster_nhits_min.clear();
+	mConfig.nps.cluster_readout_thr.clear();
+	mConfig.nps.cluster_trigger_thr.clear();
+	mConfig.nps.cluster_pair_trigger_thr.clear();
+	mConfig.nps.cluster_pair_trigger_width.clear();
+	mConfig.nps.fadcmask_mode.clear();
 
-	// for Sparisfication
-	mReadoutMode = 7;		   // 0 for 5x5 or 1 for 7x7
-	mReadoutThreshold = 100.0; // MeV
-
-	this->calcTimeWindowBins(mHitTimingWindow);
-}
-
-std::vector<bool> VTP::getTriggerType(const std::vector<double> &energies, const std::vector<bool> &hits) {
-
-	std::vector<bool> triggers(7, false); // base trigger, trigger 0-5
-
-	auto seedE = energies[0]; // seed block is 0-th index
-	auto maxE = *std::max_element(energies.begin(), energies.end());
-
-	// base trigger
-	// Central block has energy >= VTP_NPS_ECALCLUSTER_SEED_THR and is the maximum energy block in the grid
-	if (seedE >= mSeedThreshold && std::abs(seedE - maxE) < 1e-9) {
-		triggers[0] = true;
-	}
-
-	// clus trigger -> readout
-	auto totalE = std::accumulate(energies.begin(), energies.end(), 0.0);
-	int nHits = std::count(hits.begin(), hits.end(), true);
-
-	if (nHits >= mMinHits && totalE >= mClusterThreshold) {
-		triggers[0] = true; // cluster trigger
-
-		if (totalE >= mPairClusterThreshold) {
-			triggers[3] = true; // local pair 1
-								// if there is another cluster seed in the same crate
-								// VTP_NPS_ECALCLUSTER_CLUSTER_PAIR_TRIGGER_WIDTH
-								// triggers[4] = true; // local pair 2
-		}
-	}
-
-	return triggers;
+	mConfig.firmware_type.resize(mNChannels, 0);
+	mConfig.firmware_ver.resize(mNChannels, 0);
+	mConfig.offset.resize(mNChannels, mDefaultOffset);
+	mConfig.width.resize(mNChannels, mDefaultWidth);
+	mConfig.nps.cluster_hit_dt.resize(mNChannels, mDefaultHitTimingWindow);
+	mConfig.nps.cluster_seed_thr.resize(mNChannels, mDefaultSeedThreshold);
+	mConfig.nps.cluster_nhits_min.resize(mNChannels, mDefaultMinHits);
+	mConfig.nps.cluster_readout_thr.resize(mNChannels, mDefaultReadoutThreshold);
+	mConfig.nps.cluster_trigger_thr.resize(mNChannels, mDefaultClusterThreshold);
+	mConfig.nps.cluster_pair_trigger_thr.resize(mNChannels, mDefaultPairClusterThreshold);
+	mConfig.nps.cluster_pair_trigger_width.resize(mNChannels, mDefaultPairClusterWidth);
+	mConfig.nps.fadcmask_mode.resize(mNChannels, mDefaultReadoutMode);
 }
 
 void VTP::process(
-	const std::vector<std::vector<double>> &gridEnergies, const std::vector<std::vector<int>> &gridTimes
+	int seedChannel, int seedTime, double seedE, const std::vector<int> &gridChannels,
+	const std::vector<int> &gridTimes, const std::vector<double> &gridEnergies
 ) {
-	resetArrays();
-
-	// input = blocks of energies and times within the entire event time window
-	// 0-th index is the seed block
 
 	int nBlocks = gridEnergies.size();
 	if (gridTimes.size() != nBlocks) {
 		throw std::runtime_error("Error: gridEnergies and gridTimes size mismatch.");
 	}
+	if (gridChannels.size() != nBlocks) {
+		throw std::runtime_error("Error: gridEnergies and gridChannels size mismatch.");
+	}
 
-	// divide the vectors into time slices
-	// mTimeWindowBins = 22 (440 / 20);
+	// filter out those blocks outside the time window.
+	auto dt = mConfig.nps.cluster_hit_dt[seedChannel] / mDeltaT; // in number of bins
 
-	for (int iWindow = 0; iWindow < mTimeWindowBins; iWindow++) {
+	std::vector<int> validChannels;
+	std::vector<int> validTimes;
+	std::vector<double> validEnergies;
 
-		int startTime = iWindow * mHitTimingWindow / mDeltaT;
-		int endTime = (iWindow + 1) * mHitTimingWindow / mDeltaT;
+	validChannels.push_back(seedChannel);
+	validTimes.push_back(seedTime);
+	validEnergies.push_back(seedE);
 
-		std::vector<bool> hitBlocks(nBlocks, false);
-		std::vector<double> hitEnergies(nBlocks, 0.0); // fadc250 only allow 1 hit within the time window
-		std::vector<double> hitTimes(nBlocks, 0.0);
-
-		for (int iBlock = 0; iBlock < nBlocks; iBlock++) {
-
-			for (int iHit = 0; iHit < gridTimes[iBlock].size(); iHit++) {
-				auto t = gridTimes[iBlock][iHit];
-
-				// auto tns = t * mDeltaT;
-				// if (tns < 50 || tns > 370) {
-				//     continue; // only consider hits within [50, 370] ns
-				// }
-
-				if (t >= startTime && t < endTime) {
-					hitBlocks[iBlock] = true;
-					if (hitEnergies[iBlock] > 0.0) {
-						throw std::runtime_error("Error: multiple hits in one time window not allowed.");
-					}
-
-					hitEnergies[iBlock] += gridEnergies[iBlock][iHit];
-					hitTimes[iBlock] = t;
-				}
-			}
-		}
-
-		auto triggerType = getTriggerType(hitEnergies, hitBlocks); // {0,0,0,0,0,0,0}, {1,0,0,1,0,0}, etc ...
-		mTriggeredBase[iWindow] = triggerType[0];
-		mTrigger0[iWindow] = triggerType[1];
-		mTrigger1[iWindow] = triggerType[2];
-		mTrigger2[iWindow] = triggerType[3];
-		mTrigger3[iWindow] = triggerType[4];
-		mTrigger4[iWindow] = triggerType[5];
-		mTrigger5[iWindow] = triggerType[6];
-		mTriggered[iWindow] = std::any_of(triggerType.begin(), triggerType.end(), [](bool v) { return v; });
-
-		if (mTriggered[iWindow]) {
-			mTriggerTimes[iWindow] = hitTimes[0]; // seed block time
+	for (int iBlock = 0; iBlock < nBlocks; iBlock++) {
+		auto t = gridTimes[iBlock];
+		if (std::abs(t - seedTime) <= dt) {
+			validChannels.push_back(gridChannels[iBlock]);
+			validTimes.push_back(gridTimes[iBlock]);
+			validEnergies.push_back(gridEnergies[iBlock]);
 		}
 	}
+
+	auto seed_thr = mConfig.nps.cluster_seed_thr[seedChannel];
+	auto min_hits = mConfig.nps.cluster_nhits_min[seedChannel];
+	auto cluster_thr = mConfig.nps.cluster_trigger_thr[seedChannel];
+	auto pair_cluster_thr = mConfig.nps.cluster_pair_trigger_thr[seedChannel];
+
+	// early exit if seed energy is below threshold
+	if (seedE <= seed_thr) {
+		return;
+	}
+
+	// local maximum requirement
+	for (int i = 0; i < validEnergies.size(); i++) {
+		if (validEnergies[i] > seedE) {
+			return;
+		}
+	}
+
+	int nHits = validEnergies.size();
+	auto totalE = std::accumulate(validEnergies.begin(), validEnergies.end(), 0.0);
+
+	mEvent.nseeds += 1;
+	mEvent.clus_sizes.push_back(nHits);
+	mEvent.channels.push_back(validChannels);
+	mEvent.times.push_back(validTimes);
+	mEvent.energies.push_back(validEnergies);
+
+	bool tr0 = nHits >= min_hits && totalE >= cluster_thr;
+	bool tr1 = false;
+	bool tr2 = false;
+	bool tr3 = nHits >= min_hits && totalE >= pair_cluster_thr;
+	bool tr4 = false; // if there is another cluster found in the same crate (not implemented)
+	bool tr5 = false;
+
+	mEvent.trigger0.push_back(tr0);
+	mEvent.trigger1.push_back(tr1);
+	mEvent.trigger2.push_back(tr2);
+	mEvent.trigger3.push_back(tr3);
+	mEvent.trigger4.push_back(tr4);
+	mEvent.trigger5.push_back(tr5);
+
 	return;
 }
 
 void VTP::printConfig() const {
-	std::cout << "VTP Configuration:" << std::endl;
-	std::cout << "Seed Threshold: " << mSeedThreshold << " MeV" << std::endl;
-	std::cout << "Hit Timing Window: " << mHitTimingWindow << " ns" << std::endl;
-	std::cout << "Minimum Hits: " << mMinHits << std::endl;
-	std::cout << "Cluster Threshold: " << mClusterThreshold << " MeV" << std::endl;
-	std::cout << "Pair Cluster Threshold: " << mPairClusterThreshold << " MeV" << std::endl;
-	std::cout << "Pair Cluster Width: " << mPairClusterWidth << " ns" << std::endl;
-	std::cout << "Readout Mode: " << mReadoutMode << std::endl;
-	std::cout << "Readout Threshold: " << mReadoutThreshold << " MeV" << std::endl;
+	for (int i = 0; i < mNChannels; i++) {
+		std::cout << "Channel " << i << " : "
+				  << " Offset = " << mConfig.offset[i] << ", Width = " << mConfig.width[i]
+				  << ", Hit DT = " << mConfig.nps.cluster_hit_dt[i]
+				  << ", Seed Thr = " << mConfig.nps.cluster_seed_thr[i]
+				  << ", Min Hits = " << mConfig.nps.cluster_nhits_min[i]
+				  << ", Readout Thr = " << mConfig.nps.cluster_readout_thr[i]
+				  << ", Cluster Thr = " << mConfig.nps.cluster_trigger_thr[i]
+				  << ", Pair Cluster Thr = " << mConfig.nps.cluster_pair_trigger_thr[i]
+				  << ", Pair Cluster Width = " << mConfig.nps.cluster_pair_trigger_width[i]
+				  << ", FADC Mask Mode = " << mConfig.nps.fadcmask_mode[i] << std::endl;
+	}
 }
 
-void VTP::resetArrays() {
-	mTrigger0.clear();
-	mTrigger1.clear();
-	mTrigger2.clear();
-	mTrigger3.clear();
-	mTrigger4.clear();
-	mTrigger5.clear();
-	mTriggered.clear();
-	mTriggerTimes.clear();
-
-	mTriggeredBase.resize(mTimeWindowBins, false);
-	mTrigger0.resize(mTimeWindowBins, false);
-	mTrigger1.resize(mTimeWindowBins, false);
-	mTrigger2.resize(mTimeWindowBins, false);
-	mTrigger3.resize(mTimeWindowBins, false);
-	mTrigger4.resize(mTimeWindowBins, false);
-	mTrigger5.resize(mTimeWindowBins, false);
-	mTriggered.resize(mTimeWindowBins, false);
-	mTriggerTimes.resize(mTimeWindowBins, std::numeric_limits<double>::max());
-
-	return;
+void vtp_reco_evt::clear() {
+	this->nseeds = 0;
+	this->clus_sizes.clear();
+	this->channels.clear();
+	this->times.clear();
+	this->energies.clear();
+	this->trigger0.clear();
+	this->trigger1.clear();
+	this->trigger2.clear();
+	this->trigger3.clear();
+	this->trigger4.clear();
+	this->trigger5.clear();
 }
-
-bool VTP::isTriggered() const {
-	return std::any_of(mTriggeredBase.begin(), mTriggeredBase.end(), [](bool v) { return v; });
-}
+void VTP::resetEvent() { mEvent.clear(); }
