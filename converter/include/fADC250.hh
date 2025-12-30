@@ -34,7 +34,7 @@ public:
 	void resetConfig();
 	void resetEvent();
 	void printConfig() const;
-	void processRawWaveform(const std::vector<double> &waveform, int channel, bool debounce = false);
+	void processRawWaveform(const std::vector<double> &waveform, int channel, int opt = 0);
 
 	const fadc250_evt &getEvent() const { return mEvent; }
 
@@ -55,7 +55,9 @@ private:
 	std::vector<int> findPulseBR(const std::vector<double> &waveform_adc, double thr) const;
 	std::vector<int> findPulsesNaive(const std::vector<double> &waveform_adc, double thr) const;
 	std::vector<int> findPulsesDebounce(const std::vector<double> &waveform_adc, double thr) const;
-	double integrateCharge(const std::vector<double> &waveform_adc, int channel, int pulseIndex) const;
+	double integrateCharge(
+		const std::vector<double> &waveform_adc, int pulseIndex, int nsa, int nsb, double ped, double gain
+	) const;
 
 protected:
 	// Below are fixed values used in THcRawAdcHit class in hcana
