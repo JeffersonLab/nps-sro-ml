@@ -93,22 +93,19 @@ bool fADC250::loadConfig(const std::string &filename) {
 	return true;
 }
 
-void fADC250::processRawWaveform(const std::vector<double> &waveform, int channel, bool debounce) {
+void fADC250::processRawWaveform(const std::vector<double> &waveform, int channel, int opt) {
 
 	auto ped = mConfig.ped[channel];
-	auto thr = mConfig.thr[channel];
+	auto thr = mConfig.thr[channel] + ped;
+	auto nsa = mConfig.nsa[channel];
+	auto nsb = mConfig.nsb[channel];
+	auto gain = mConfig.gain[channel];
 
-	std::vector<double> waveform_ = waveform;
-	for (auto &sample : waveform_) {
-		sample -= ped;
-	}
-
-	auto pulses = findPulses(waveform_, thr, debounce);
-
+	auto pulses = findPulses(waveform, thr, opt);
 	mEvent.nhits += pulses.size();
 
 	for (const auto &p : pulses) {
-		auto charge = integrateCharge(waveform_, channel, p);
+		auto charge = integrateCharge(waveform, p, nsa, nsb, ped, gain);
 		mEvent.times.push_back(p);
 		mEvent.energies.push_back(charge);
 		mEvent.channels.push_back(channel);
@@ -170,6 +167,7 @@ std::vector<int> fADC250::findPulsesDebounce(const std::vector<double> &waveform
 std::vector<int> fADC250::findPulseBR(const std::vector<double> &waveform_adc, double thr) const {
 
 	int current_over, last_over = 0;
+	int last_over_hist = 0;
 	std::vector<int> res;
 	for (int i = 0; i < (int)waveform_adc.size(); ++i) {
 
@@ -179,8 +177,15 @@ std::vector<int> fADC250::findPulseBR(const std::vector<double> &waveform_adc, d
 			current_over = 0;
 		}
 
-		if (current_over && !last_over) {
+		if (current_over && !last_over && !(last_over_hist & ((1u << mClockCycles) - 1))) {
 			res.push_back(i);
+		}
+
+		// update bit history (shift left by 1 and add 1 if leading edge)
+		if (current_over && !last_over) {
+			last_over_hist = (last_over_hist << 1) | 1;
+		} else {
+			last_over_hist = (last_over_hist << 1);
 		}
 		last_over = current_over;
 	}
@@ -203,11 +208,9 @@ std::vector<int> fADC250::findPulsesNaive(const std::vector<double> &waveform_ad
 	return res;
 }
 
-double fADC250::integrateCharge(const std::vector<double> &waveform_adc, int channel, int pulseIndex) const {
-
-	auto nsa = mConfig.nsa[channel];
-	auto nsb = mConfig.nsb[channel];
-	auto gain = mConfig.gain[channel];
+double fADC250::integrateCharge(
+	const std::vector<double> &waveform_adc, int pulseIndex, int nsa, int nsb, double ped, double gain
+) const {
 
 	int startIndex = pulseIndex - nsb;
 	int endIndex = pulseIndex + nsa - 1;
@@ -221,10 +224,10 @@ double fADC250::integrateCharge(const std::vector<double> &waveform_adc, int cha
 	}
 
 	auto integral = std::accumulate(waveform_adc.begin() + startIndex, waveform_adc.begin() + endIndex + 1, 0.0);
+	integral -= ped * (endIndex - startIndex + 1);
 
 	// GAIN is setup such that GAIN * adc unit --> MeV.
-	// NOTE from Ben : gain precision is up to 0.004, will have adjust the value from config file
-	// return integral * gain;
+	// NOTE from Ben : gain precision is up to 0.004, will have to adjust the value from config file
 	auto e = integral * gain;
 
 	// hardware clip to 13 bits
