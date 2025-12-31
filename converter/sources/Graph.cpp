@@ -187,9 +187,9 @@ void GraphBuilder::reset() {
 	mBuilt = false;
 }
 
-GraphData GraphBuilder::buildGraph() {
+GraphUtils::GraphData GraphBuilder::buildGraph() {
 
-	GraphData graphData{
+	GraphUtils::GraphData graph{
 		.nodeIds = {},
 		.nodeFeatures = {},
 		.nodeTargets = {},
@@ -200,12 +200,12 @@ GraphData GraphBuilder::buildGraph() {
 	};
 
 	for (const auto &[id, features] : mNodeFeatures) {
-		graphData.nodeIds.push_back(id);
-		graphData.nodeFeatures.push_back(features);
+		graph.nodeIds.push_back(id);
+		graph.nodeFeatures.push_back(features);
 		if (mNodeTargets.count(id)) {
-			graphData.nodeTargets.push_back(mNodeTargets.at(id));
+			graph.nodeTargets.push_back(mNodeTargets.at(id));
 		} else {
-			graphData.nodeTargets.push_back(std::vector<double>{});
+			graph.nodeTargets.push_back(std::vector<double>{});
 		}
 	}
 
@@ -218,10 +218,10 @@ GraphData GraphBuilder::buildGraph() {
 	// build edges
 	for (const auto &[src_id, neighbors] : mEdges) {
 		for (const auto &dst_id : neighbors) {
-			graphData.edgeIndex[0].push_back(src_id);
-			graphData.edgeIndex[1].push_back(dst_id);
+			graph.edgeIndex[0].push_back(src_id);
+			graph.edgeIndex[1].push_back(dst_id);
 			// add edge features if exist here so the order matches edgeIndex
-			graphData.edgeFeatures.push_back(
+			graph.edgeFeatures.push_back(
 				mEdgeFeatures.count({src_id, dst_id}) ? mEdgeFeatures.at({src_id, dst_id}) : std::vector<double>{}
 			);
 		}
@@ -230,9 +230,9 @@ GraphData GraphBuilder::buildGraph() {
 	// build edge targets
 	for (const auto &[src_id, targets] : mEdgeTargets) {
 		for (const auto &dst_id : targets) {
-			graphData.edgeTargetIndex[0].push_back(src_id);
-			graphData.edgeTargetIndex[1].push_back(dst_id);
-			graphData.edgeTargetFeatures.push_back(
+			graph.edgeTargetIndex[0].push_back(src_id);
+			graph.edgeTargetIndex[1].push_back(dst_id);
+			graph.edgeTargetFeatures.push_back(
 				mEdgeTargetFeatures.count({src_id, dst_id}) ? mEdgeTargetFeatures.at({src_id, dst_id})
 															: std::vector<double>{}
 			);
@@ -240,7 +240,7 @@ GraphData GraphBuilder::buildGraph() {
 	}
 
 	mBuilt = true;
-	return std::move(graphData);
+	return std::move(graph);
 }
 
 int GraphBuilder::getNumEdges() const {
@@ -250,6 +250,7 @@ int GraphBuilder::getNumEdges() const {
 	}
 	return count;
 }
+
 int GraphBuilder::getNumEdgeTargets() const {
 	int count = 0;
 	for (const auto &[src_id, targets] : mEdgeTargets) {

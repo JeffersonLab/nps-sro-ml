@@ -11,6 +11,8 @@
 #include <unordered_set>
 #include <vector>
 
+namespace GraphUtils {
+
 struct GraphData {
 	std::vector<int> nodeIds;
 	std::vector<std::vector<double>> nodeFeatures;		 // [num_nodes][num_node_features]
@@ -21,7 +23,6 @@ struct GraphData {
 	std::vector<std::vector<int>> edgeTargetIndex;		 // [2][num_target_edges]
 };
 
-namespace GraphUtils {
 int countNodes(const std::vector<std::vector<int>> &edgeIndex);
 int getLargestNodeId(const std::vector<std::vector<int>> &edgeIndex);
 std::unordered_map<int, std::vector<int>> buildAdjacencyList(const std::vector<std::vector<int>> &edgeIndex);
@@ -46,7 +47,7 @@ public:
 	void addEdgeTarget(int src_id, int dst_id);
 	void addEdgeTarget(int src_id, int dst_id, const std::vector<double> &target);
 
-	GraphData buildGraph();
+	GraphUtils::GraphData buildGraph();
 	void reset();
 
 	inline bool isDirected() const noexcept;
