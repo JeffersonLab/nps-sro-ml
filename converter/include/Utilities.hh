@@ -15,6 +15,8 @@
 #include <torch/serialize.h>
 #include <torch/torch.h>
 
+namespace TorchUtils {
+
 template <typename T> std::vector<T> flatten(const std::vector<std::vector<T>> &input) {
 	std::vector<T> output;
 	for (const auto &vec : input) {
@@ -85,4 +87,5 @@ template <typename... Tensors> void saveTensors(const std::string &output_file, 
 	return;
 }
 
+} // namespace TorchUtils
 #endif
