@@ -245,10 +245,52 @@ void setBranchAddresses(TChain *&chain, npsBranches &buffer) {
 	chain->SetBranchAddress("NPScorrUS_setCurr", &buffer.NPScorrUS_setCurr);
 }
 
-void readSignal(
-	const int &NSampWaveForm, const std::array<double, NPS::NDATA> &SampWaveForm, std::vector<int> &blocks,
+/**
+ * Construct nodes from waveform signals
+ * - read waveform from buffer.NPS_cal_fly_adcSampWaveform
+ * - format: [block_id, n_samples, sample1, sample2, ..., block_id, n_samples, sample1, sample2, ...]
+ * - each node corresponds to a block with its waveform as features
+ */
+
+/**
+ * @brief Parse waveform samples and construct block-level signals.
+ *
+ * This function reads the raw ADC waveform from NPS replay and
+ * loads it into per-block waveform vectors.
+ *
+ * The input buffer encodes multiple blocks in the following linear format:
+ * @verbatim
+ *   [ block_id, n_samples, sample_0, sample_1, ..., sample_(n_samples-1),
+ *     block_id, n_samples, sample_0, ... ]
+ * @endverbatim
+ *
+ * @param[in]  NSampWaveForm  Total number of entries in the waveform buffer.
+ * @param[in]  SampWaveForm  Raw waveform buffer containing block IDs and samples.
+ * @param[out] blocks        Vector of unique block IDs found in the buffer.
+ * @param[out] signals       Vector of waveform samples corresponding to each block.
+ *
+ * @return int
+ *   - 0 on successful parsing
+ *   - 1 if the buffer size exceeds NPS::NDATA
+ *
+ * @warning
+ *   If the buffer ends prematurely (i.e. fewer samples than declared for a block),
+ *   the function emits a warning and stops further parsing.
+ *
+ * @pre
+ *   SampWaveForm must follow the expected linear encoding format.
+ *
+ * @post
+ *   The vectors @p blocks and @p signals are cleared and repopulated.
+ */
+int readSignal(
+	int NSampWaveForm, const std::array<double, NPS::NDATA> &SampWaveForm, std::vector<int> &blocks,
 	std::vector<std::vector<double>> &signals
 ) {
+	if (NSampWaveForm > NPS::NDATA) {
+		return 1;
+	}
+
 	signals.clear();
 	blocks.clear();
 
@@ -298,6 +340,7 @@ void readSignal(
 		// Move the waveform into the result vector (no copy)
 		signals.emplace_back(std::move(sig));
 	}
+	return 0;
 }
 
 } // namespace NPS

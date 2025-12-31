@@ -231,8 +231,8 @@ struct npsBranches {
 };
 
 void setBranchAddresses(TChain *&chain, npsBranches &buffer);
-void readSignal(
-	const int &NSampWaveForm, const std::array<double, NPS::NDATA> &SampWaveForm, std::vector<int> &blocks,
+int readSignal(
+	int NSampWaveForm, const std::array<double, NPS::NDATA> &SampWaveForm, std::vector<int> &blocks,
 	std::vector<std::vector<double>> &signals
 );
 
