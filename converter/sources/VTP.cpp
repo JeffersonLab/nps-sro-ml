@@ -180,12 +180,12 @@ void VTP::process(
 	auto pair_cluster_thr = mConfig.nps.cluster_pair_trigger_thr[seedChannel];
 
 	// early exit if seed energy is below threshold
-	if (seedE <= seed_thr) {
+	if (seedE < seed_thr) {
 		return;
 	}
 
 	// local maximum requirement
-	for (int i = 0; i < validEnergies.size(); i++) {
+	for (int i = 1; i < validEnergies.size(); i++) {
 		if (validEnergies[i] > seedE) {
 			return;
 		}
