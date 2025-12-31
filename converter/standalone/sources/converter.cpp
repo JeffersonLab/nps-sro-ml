@@ -89,7 +89,7 @@ int main(int argc, char **argv) {
 			finishEvent();
 			continue;
 		}
-		if (isCorruptSignals(signals) || signalFlag != 0) {
+		if (isCorruptSignals(signals)) {
 			auto msg = Form(
 				"Corrupt signals with size [%zu][%zu] in event %d", signals.size(),
 				signals.size() > 0 ? signals[0].size() : 0, currEvent
