@@ -2,6 +2,7 @@
 #define FADC250_HH
 
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <limits>
@@ -51,9 +52,8 @@ private:
 
 	int mClockCycles; // No threshold crossing occurred in the past n clock cycles
 
-	std::vector<int> findPulses(const std::vector<double> &waveform_adc, double thr, int opt) const;
-	std::vector<int> findPulseBR(const std::vector<double> &waveform_adc, double thr) const;
-	std::vector<int> findPulsesNaive(const std::vector<double> &waveform_adc, double thr) const;
+	std::vector<int> findPulses(const std::vector<double> &waveform_adc, double thr, int opt=0) const;
+	std::vector<int> findPulseFirmware(const std::vector<double> &waveform_adc, double thr) const;
 	std::vector<int> findPulsesDebounce(const std::vector<double> &waveform_adc, double thr) const;
 	double integrateCharge(
 		const std::vector<double> &waveform_adc, int pulseIndex, int nsa, int nsb, double ped, double gain

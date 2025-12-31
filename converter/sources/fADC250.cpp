@@ -102,10 +102,9 @@ void fADC250::processRawWaveform(const std::vector<double> &waveform, int channe
 	auto gain = mConfig.gain[channel];
 
 	auto pulses = findPulses(waveform, thr, opt);
-	mEvent.nhits += pulses.size();
-
 	for (const auto &p : pulses) {
 		auto charge = integrateCharge(waveform, p, nsa, nsb, ped, gain);
+		mEvent.nhits += 1;
 		mEvent.times.push_back(p);
 		mEvent.energies.push_back(charge);
 		mEvent.channels.push_back(channel);
@@ -116,11 +115,9 @@ void fADC250::processRawWaveform(const std::vector<double> &waveform, int channe
 std::vector<int> fADC250::findPulses(const std::vector<double> &waveform_adc, double thr, int opt) const {
 	switch (opt) {
 	case 0:
-		return findPulseBR(waveform_adc, thr);
+		return findPulseFirmware(waveform_adc, thr);
 	case 1:
 		return findPulsesDebounce(waveform_adc, thr);
-	case 2:
-		return findPulsesNaive(waveform_adc, thr);
 	default:
 		throw std::invalid_argument("Invalid option for findPulses");
 	}
@@ -150,7 +147,7 @@ std::vector<int> fADC250::findPulsesDebounce(const std::vector<double> &waveform
 			}
 		}
 
-		if (n_above >= mNSAT) {
+		if (n_above >= mNSAT && ns) {
 			// Valid pulse found
 			res.push_back(ns);
 			prev_above = true;
@@ -164,46 +161,29 @@ std::vector<int> fADC250::findPulsesDebounce(const std::vector<double> &waveform
 	return res;
 }
 
-std::vector<int> fADC250::findPulseBR(const std::vector<double> &waveform_adc, double thr) const {
-
-	int current_over, last_over = 0;
+std::vector<int> fADC250::findPulseFirmware(const std::vector<double> &waveform_adc, double thr) const {
+	int current_over = 0;
+	int last_over = 0;
 	int last_over_hist = 0;
 	std::vector<int> res;
+
+	uint32_t mask = (1u << mClockCycles) - 1;
+
 	for (int i = 0; i < (int)waveform_adc.size(); ++i) {
+		current_over = (waveform_adc[i] > thr) ? 1 : 0;
 
-		if (waveform_adc[i] > thr) {
-			current_over = 1;
-		} else {
-			current_over = 0;
-		}
-
-		if (current_over && !last_over && !(last_over_hist & ((1u << mClockCycles) - 1))) {
+		if (i > 0 && current_over && !last_over && !(last_over_hist & mask)) {
 			res.push_back(i);
 		}
 
-		// update bit history (shift left by 1 and add 1 if leading edge)
+		// Update history: Only record the leading edge transition in the bit history
 		if (current_over && !last_over) {
 			last_over_hist = (last_over_hist << 1) | 1;
 		} else {
 			last_over_hist = (last_over_hist << 1);
 		}
+
 		last_over = current_over;
-	}
-	return res;
-}
-
-std::vector<int> fADC250::findPulsesNaive(const std::vector<double> &waveform_adc, double thr) const {
-
-	std::vector<int> res; // valid indices where threshold crossing occurred
-	int lastPulseIndex = -mClockCycles;
-	for (int i = 0; i < (int)waveform_adc.size(); ++i) {
-
-		auto is_crossed = waveform_adc[i] >= thr;
-
-		if (is_crossed && i - lastPulseIndex >= mClockCycles) {
-			res.push_back(i);
-			lastPulseIndex = i;
-		}
 	}
 	return res;
 }
@@ -212,32 +192,25 @@ double fADC250::integrateCharge(
 	const std::vector<double> &waveform_adc, int pulseIndex, int nsa, int nsb, double ped, double gain
 ) const {
 
-	int startIndex = pulseIndex - nsb;
-	int endIndex = pulseIndex + nsa - 1;
+	int startIndex = std::max(0, pulseIndex - nsb);
+	int endIndex = std::min((int)waveform_adc.size() - 1, pulseIndex + nsa - 1);
+	int numSamples = endIndex - startIndex + 1;
 
-	// Ensure indices are within waveform bounds
-	if (startIndex < 0) {
-		startIndex = 0;
-	}
-	if (endIndex >= static_cast<int>(waveform_adc.size())) {
-		endIndex = waveform_adc.size() - 1;
+	// 1. Sum raw ADC values as integers (mimicking the unsigned short buffer)
+	double rawSum = 0;
+	for (int i = startIndex; i <= endIndex; ++i) {
+		rawSum += (int)waveform_adc[i];
 	}
 
-	auto integral = std::accumulate(waveform_adc.begin() + startIndex, waveform_adc.begin() + endIndex + 1, 0.0);
-	integral -= ped * (endIndex - startIndex + 1);
+	// 2. Mimic the "shim" and truncation
+	int intPedSub = (int)(ped * numSamples + (0.001 * numSamples));
+	int adcCorrected = (int)rawSum - intPedSub;
 
-	// GAIN is setup such that GAIN * adc unit --> MeV.
-	// NOTE from Ben : gain precision is up to 0.004, will have to adjust the value from config file
-	auto e = integral * gain;
+	// 3. Mimic the fixed-point gain scaling
+	int scaledGain = (int)(gain * 256.0);
+	double finalCharge = (double)(adcCorrected * scaledGain) / 256.0;
 
-	// hardware clip to 13 bits
-	if (e < 0) {
-		e = 0;
-	}
-	if (e > 8191) {
-		e = 8191;
-	}
-	return e;
+	return std::max(0.0, std::min(8191.0, finalCharge));
 }
 
 void fADC250::printConfig() const {
