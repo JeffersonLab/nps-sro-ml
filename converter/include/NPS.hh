@@ -5,19 +5,59 @@
 #include <array>
 #include <iostream>
 #include <string>
+#include <unordered_set>
+
+namespace NPS {
 
 const int NTIME = 110;						// number of time samples for each fADC channel
-const int NCOLS = 30;						// number of calo colomns tested in this run (3 for runs 55 and 56)
-const int NROWS = 36;						// number of calo blocks in each colomn
-const int NBLOCKS = NCOLS * NROWS;			// number of tested calo blocks
-const double dt = 4.;						// time bin (sample) width (4 ns), the total time window is
-											// then NTIME*dt
-const int NSLOTS = 1104;					// nb maximal de slots dans tous les fADC
-const int NDATA = NSLOTS * (NTIME + 1 + 1); //(1104 slots fADC au total mais pas tous utilises y compris 2 PM
+const double DELTA_T = 4.0;					// time in ns per timestamp
+const int NCOLS = 30;						// number of calorimeter columns
+const int NROWS = 36;						// number of calorimeter blocks in each column
+const int NBLOCKS = NCOLS * NROWS;			// number of calorimeter blocks
+const int NSLOTS = 1104;					// number of maximum slots
+const int NDATA = NSLOTS * (NTIME + 1 + 1); //(1104 slots fADC for each of 110 timestamp + 2 pmt
+
+const int MAX_CLUSTERS = 256;	 // arbitrary limit on the number of clusters found in hcana
+const int MAX_VTP_TRIGGERS = 64; // arbitrary limit on the number of VTP triggers
+
+struct BlockInfo {
+	int channel;
+	int row;
+	int col;
+	int crate;
+	int slot;
+};
+
+struct PairHash {
+	size_t operator()(const std::pair<int, int> &p) const noexcept {
+		return (static_cast<size_t>(p.first) << 32) ^ static_cast<int>(p.second);
+	}
+};
+
+class Geometry {
+public:
+	Geometry(const std::string &config_file);
+	~Geometry() = default;
+
+	int getBlockFromColRow(int col, int row) const;
+	std::pair<int, int> getColRowFromBlock(int block) const;
+	int getCrateFromBlock(int block) const;
+	int getSlotFromBlock(int block) const;
+
+	bool isNeighbour(int ch1, int ch2) const;
+
+	bool isInsideGrid(int seedChannel, int channel, int gridSize) const;
+
+private:
+	std::vector<BlockInfo> mBlocks;				  // index-based lookup
+	std::unordered_map<int, BlockInfo> mIndexMap; // block -> info
+	std::unordered_map<std::pair<int, int>, int, PairHash> mRcToIndex;
+	void loadConfig(const std::string &config_file);
+};
 
 struct npsBranches {
 
-    // Global branches
+	// Global branches
 	double g_evtime;
 
 	// Ndata.NPS branches
@@ -83,72 +123,65 @@ struct npsBranches {
 	int Ndata_NPS_cal_vtpTrigType5;
 
 	// NPS branches
-	std::array<double, 256> NPS_cal_clusE;
-	std::array<double, 256> NPS_cal_clusSize;
-	std::array<double, 256> NPS_cal_clusT;
-	std::array<double, 256> NPS_cal_clusX;
-	std::array<double, 256> NPS_cal_clusY;
-	std::array<double, 256> NPS_cal_clusZ;
-	std::array<double, 1024> NPS_cal_fly_adcCounter;
-	std::array<double, 1024> NPS_cal_fly_adcErrorFlag;
-	std::array<double, 1024> NPS_cal_fly_adcPed;
-	std::array<double, 1024> NPS_cal_fly_adcPedRaw;
-	std::array<double, 1024> NPS_cal_fly_adcPulseAmp;
-	std::array<double, 1024> NPS_cal_fly_adcPulseAmpRaw;
-	std::array<double, 1024> NPS_cal_fly_adcPulseInt;
-	std::array<double, 1024> NPS_cal_fly_adcPulseIntRaw;
-	std::array<double, 1024> NPS_cal_fly_adcPulseTime;
-	std::array<double, 1024> NPS_cal_fly_adcPulseTimeRaw;
-	std::array<double, 1024> NPS_cal_fly_adcSampPed;
-	std::array<double, 1024> NPS_cal_fly_adcSampPedRaw;
-	std::array<double, 1024> NPS_cal_fly_adcSampPulseAmp;
-	std::array<double, 1024> NPS_cal_fly_adcSampPulseAmpRaw;
-	std::array<double, 1024> NPS_cal_fly_adcSampPulseInt;
-	std::array<double, 1024> NPS_cal_fly_adcSampPulseIntRaw;
-	std::array<double, 1024> NPS_cal_fly_adcSampPulseTime;
-	std::array<double, 1024> NPS_cal_fly_adcSampPulseTimeRaw;
-	std::array<double, 112 * 1104> NPS_cal_fly_adcSampWaveform;
-	std::array<double, 1080> NPS_cal_fly_block_clusterID;
-	std::array<double, 1080> NPS_cal_fly_e;
-	std::array<double, 1080> NPS_cal_fly_goodAdcMult;
-	std::array<double, 1080> NPS_cal_fly_goodAdcPed;
-	std::array<double, 1080> NPS_cal_fly_goodAdcPulseAmp;
-	std::array<double, 1080> NPS_cal_fly_goodAdcPulseInt;
-	std::array<double, 1080> NPS_cal_fly_goodAdcPulseIntRaw;
-	std::array<double, 1080> NPS_cal_fly_goodAdcPulseTime;
-	std::array<double, 1080> NPS_cal_fly_goodAdcTdcDiffTime;
-	std::array<double, 1080> NPS_cal_fly_numGoodAdcHits;
-	std::array<double, 256> NPS_cal_trk_mult;
-	std::array<double, 256> NPS_cal_trk_p;
-	std::array<double, 256> NPS_cal_trk_px;
-	std::array<double, 256> NPS_cal_trk_py;
-	std::array<double, 256> NPS_cal_trk_pz;
-	std::array<double, 256> NPS_cal_trk_x;
-	std::array<double, 256> NPS_cal_trk_y;
-
-	// vld
-	std::array<double, 256> NPS_cal_vldColumn;
-	std::array<double, 256> NPS_cal_vldHiChannelMask;
-	std::array<double, 256> NPS_cal_vldLoChannelMask;
-	std::array<double, 256> NPS_cal_vldPMT;
-	std::array<double, 256> NPS_cal_vldRow;
+	std::array<double, MAX_CLUSTERS> NPS_cal_clusE;
+	std::array<double, MAX_CLUSTERS> NPS_cal_clusSize;
+	std::array<double, MAX_CLUSTERS> NPS_cal_clusT;
+	std::array<double, MAX_CLUSTERS> NPS_cal_clusX;
+	std::array<double, MAX_CLUSTERS> NPS_cal_clusY;
+	std::array<double, MAX_CLUSTERS> NPS_cal_clusZ;
+	std::array<double, NBLOCKS> NPS_cal_fly_adcCounter;
+	std::array<double, NBLOCKS> NPS_cal_fly_adcErrorFlag;
+	std::array<double, NBLOCKS> NPS_cal_fly_adcPed;
+	std::array<double, NBLOCKS> NPS_cal_fly_adcPedRaw;
+	std::array<double, NBLOCKS> NPS_cal_fly_adcPulseAmp;
+	std::array<double, NBLOCKS> NPS_cal_fly_adcPulseAmpRaw;
+	std::array<double, NBLOCKS> NPS_cal_fly_adcPulseInt;
+	std::array<double, NBLOCKS> NPS_cal_fly_adcPulseIntRaw;
+	std::array<double, NBLOCKS> NPS_cal_fly_adcPulseTime;
+	std::array<double, NBLOCKS> NPS_cal_fly_adcPulseTimeRaw;
+	std::array<double, NBLOCKS> NPS_cal_fly_adcSampPed;
+	std::array<double, NBLOCKS> NPS_cal_fly_adcSampPedRaw;
+	std::array<double, NBLOCKS> NPS_cal_fly_adcSampPulseAmp;
+	std::array<double, NBLOCKS> NPS_cal_fly_adcSampPulseAmpRaw;
+	std::array<double, NBLOCKS> NPS_cal_fly_adcSampPulseInt;
+	std::array<double, NBLOCKS> NPS_cal_fly_adcSampPulseIntRaw;
+	std::array<double, NBLOCKS> NPS_cal_fly_adcSampPulseTime;
+	std::array<double, NBLOCKS> NPS_cal_fly_adcSampPulseTimeRaw;
+	std::array<double, NDATA> NPS_cal_fly_adcSampWaveform;
+	std::array<double, NBLOCKS> NPS_cal_fly_block_clusterID;
+	std::array<double, NBLOCKS> NPS_cal_fly_e;
+	std::array<double, NBLOCKS> NPS_cal_fly_goodAdcMult;
+	std::array<double, NBLOCKS> NPS_cal_fly_goodAdcPed;
+	std::array<double, NBLOCKS> NPS_cal_fly_goodAdcPulseAmp;
+	std::array<double, NBLOCKS> NPS_cal_fly_goodAdcPulseInt;
+	std::array<double, NBLOCKS> NPS_cal_fly_goodAdcPulseIntRaw;
+	std::array<double, NBLOCKS> NPS_cal_fly_goodAdcPulseTime;
+	std::array<double, NBLOCKS> NPS_cal_fly_goodAdcTdcDiffTime;
+	std::array<double, NBLOCKS> NPS_cal_fly_numGoodAdcHits;
+	std::array<double, NBLOCKS> NPS_cal_trk_mult;
+	std::array<double, NBLOCKS> NPS_cal_trk_p;
+	std::array<double, NBLOCKS> NPS_cal_trk_px;
+	std::array<double, NBLOCKS> NPS_cal_trk_py;
+	std::array<double, NBLOCKS> NPS_cal_trk_pz;
+	std::array<double, NBLOCKS> NPS_cal_trk_x;
+	std::array<double, NBLOCKS> NPS_cal_trk_y;
 
 	// vtp
-	std::array<double, 2048> NPS_cal_vtpClusE;
-	std::array<double, 2048> NPS_cal_vtpClusSize;
-	std::array<double, 2048> NPS_cal_vtpClusTime;
-	std::array<double, 2048> NPS_cal_vtpClusX;
-	std::array<double, 2048> NPS_cal_vtpClusY;
-	std::array<double, 256> NPS_cal_vtpTrigCrate;
-	std::array<double, 256> NPS_cal_vtpTrigTime;
-	std::array<double, 256> NPS_cal_vtpTrigType0;
-	std::array<double, 256> NPS_cal_vtpTrigType1;
-	std::array<double, 256> NPS_cal_vtpTrigType2;
-	std::array<double, 256> NPS_cal_vtpTrigType3;
-	std::array<double, 256> NPS_cal_vtpTrigType4;
-	std::array<double, 256> NPS_cal_vtpTrigType5;
+	std::array<double, NBLOCKS> NPS_cal_vtpClusE;
+	std::array<double, NBLOCKS> NPS_cal_vtpClusSize;
+	std::array<double, NBLOCKS> NPS_cal_vtpClusTime;
+	std::array<double, NBLOCKS> NPS_cal_vtpClusX;
+	std::array<double, NBLOCKS> NPS_cal_vtpClusY;
+	std::array<double, MAX_VTP_TRIGGERS> NPS_cal_vtpTrigCrate;
+	std::array<double, MAX_VTP_TRIGGERS> NPS_cal_vtpTrigTime;
+	std::array<double, MAX_VTP_TRIGGERS> NPS_cal_vtpTrigType0;
+	std::array<double, MAX_VTP_TRIGGERS> NPS_cal_vtpTrigType1;
+	std::array<double, MAX_VTP_TRIGGERS> NPS_cal_vtpTrigType2;
+	std::array<double, MAX_VTP_TRIGGERS> NPS_cal_vtpTrigType3;
+	std::array<double, MAX_VTP_TRIGGERS> NPS_cal_vtpTrigType4;
+	std::array<double, MAX_VTP_TRIGGERS> NPS_cal_vtpTrigType5;
 
-    // Additional NPS branches
+	// Additional NPS branches
 	double NPS_cal_etot;
 	double NPS_cal_fly_earray;
 	double NPS_cal_fly_nclust;
@@ -198,4 +231,11 @@ struct npsBranches {
 };
 
 void setBranchAddresses(TChain *&chain, npsBranches &buffer);
+int readSignal(
+	int NSampWaveForm, const std::array<double, NPS::NDATA> &SampWaveForm, std::vector<int> &blocks,
+	std::vector<std::vector<double>> &signals
+);
+
+} // namespace NPS
+
 #endif
