@@ -70,6 +70,10 @@ def pack_to_graph_batches(x: torch.Tensor, *args, batch: torch.LongTensor) -> Tu
     """
     device = x.device
     B = int(batch.max().item()) + 1  # number of graphs in the batch
+    assert set(batch.tolist()) == set(
+        range(B)
+    ), "Batch IDs must be contiguous starting at 0."
+
     N, D = x.size()  # total number of nodes, feature dimension
     L_max = batch.bincount(minlength=B).max().item()  # max number of nodes per graph
 
