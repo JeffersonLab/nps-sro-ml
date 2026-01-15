@@ -74,14 +74,14 @@ def write_json(content: dict, fname: str | pathlib.Path):
 
 
 def import_attr(
-    attr_name: str, avail_modules: List[str] | str, *args, **kwargs
+    attr_name: str | None, avail_modules: List[str] | str, *args, **kwargs
 ) -> Tuple[Any, str]:
     """
     Dynamically import an attribute (class, function, variable) from a list of available modules. By default, returns the first successfully imported attribute. If the attribute is not found in any of the provided modules, raises an ImportError with detailed information about the attempts.
 
     Parameters
     ----------
-    attr_name : str
+    attr_name : str|None
         Name of the attribute to import.
     avail_modules : List[str] | str
         List of module names (as strings) to search for the attribute.
@@ -115,6 +115,9 @@ def import_attr(
         except ImportError as e:
             log_msg[mod_name].append(str(e))
             continue
+
+        if attr_name is None:
+            return module, mod_name
 
         attr = getattr(module, attr_name, None)
         if attr is not None:
