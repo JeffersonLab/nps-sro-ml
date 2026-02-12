@@ -50,7 +50,7 @@ class NPSDataset(Dataset):
             data_dir = pathlib.Path(data_dir)
             self.logger.info(f"Scanning for .pt files under {data_dir}")
 
-            iterator = data_dir.rglob("*.pt")
+            iterator = data_dir.glob("*.pt")
             for pth in iterator:
                 if len(self.paths) >= max_files:
                     break
