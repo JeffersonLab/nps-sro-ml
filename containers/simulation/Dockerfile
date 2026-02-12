@@ -4,11 +4,25 @@
 # which provides ROOT, PODIO, EDM4hep, JANA2, and other EIC dependencies.
 #
 # Build:
-#   docker build -t eicdev/nps-sim:latest --build-arg BUILD_THREADS=24 .
-#   docker buildx build --tag eicdev/nps-sim:latest --push .
+#     docker build -t eicdev/nps-sim:latest --build-arg BUILD_THREADS=24 .
+#  using buildx for clean cmake error report (but verbose):
+#     docker buildx build --tag eicdev/nps-sim:latest --progress=plain --push .
+#     docker buildx build --build-arg BUILD_THREADS=20 --tag eicdev/nps-sim:latest --progress=plain --push .
+#  using stop and enter an image on failure
+#     BUILDX_EXPERIMENTAL=1 docker buildx debug --invoke bash build --progress=plain .
+#  in PShell instead of BUILDX_EXPERIMENTAL=1 use:
+#    $env:BUILDX_EXPERIMENTAL="1"
 #
 # Run:
 #   docker run --rm -it --init eicdev/nps-sim:latest
+#
+# ======== APPTAINERS / SINGULARITY =============
+# To pull image from dockerhub
+#    apptainer pull nps-sim.sif docker://eicdev/nps-sim:latest
+#
+# To run interactively
+#    apptainer shell nps-sim.sif
+#
 
 FROM eicdev/eic-evio-pre:latest
 
@@ -23,22 +37,28 @@ WORKDIR ${APP_ROOT}
 # Additional OS dependencies for Geant4 and NPS packages
 RUN apt-get update && \
     apt-get install -y \
-        libxerces-c-dev \
+        libxerces-c3-dev \
+        libexpat-dev \
         libgl1-mesa-dev \
         libglu1-mesa-dev \
+        libx11-dev \
         libxt-dev \
         libxmu-dev \
+        libxrender-dev \
+        libxpm-dev \
+        libxft-dev \
         libxi-dev \
-        libexpat-dev \
-        qtbase5-dev \
+        qt6-base-dev \
+        libqt6opengl6-dev \
         tcsh \
+        gfortran \
     && apt-get clean && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
 
 ### ---------------------------------------------------------------------- ###
 ###          Geant4 build                                                  ###
 ### ---------------------------------------------------------------------- ###
-ARG VERSION_GEANT4=v11.2.1
+ARG VERSION_GEANT4=v11.4.0
 ENV GEANT4_SRC_PATH=${APP_ROOT}/geant4-src \
     GEANT4_BLD_PATH=${APP_ROOT}/geant4-build \
     GEANT4_INS_PATH=${APP_ROOT}/geant4
@@ -48,13 +68,17 @@ RUN set -ex && \
     cmake \
       -S "${GEANT4_SRC_PATH}" \
       -B "${GEANT4_BLD_PATH}" \
+      -Wno-dev \
       -DCMAKE_INSTALL_PREFIX="${GEANT4_INS_PATH}" \
       -DCMAKE_BUILD_TYPE=RelWithDebInfo \
       -DGEANT4_INSTALL_DATA=ON \
       -DGEANT4_USE_GDML=ON \
       -DGEANT4_USE_OPENGL_X11=ON \
+      -DGEANT4_USE_RAYTRACER_X11=ON \
       -DGEANT4_USE_QT=ON \
-      -DGEANT4_USE_SYSTEM_EXPAT=ON && \
+      -DGEANT4_USE_SYSTEM_EXPAT=ON \
+      -DGEANT4_BUILD_MULTITHREADED=ON \
+      -DGEANT4_BUILD_TLS_MODEL=global-dynamic && \
     cmake --build "${GEANT4_BLD_PATH}" --target install -j"${BUILD_THREADS}" && \
     rm -rf "${GEANT4_BLD_PATH}" "${GEANT4_SRC_PATH}"
 
