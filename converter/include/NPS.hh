@@ -6,6 +6,7 @@
 #include <iostream>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 namespace NPS {
 
@@ -26,6 +27,22 @@ struct BlockInfo {
 	int col;
 	int crate;
 	int slot;
+};
+
+struct Pulse {
+	double energy;
+	double time;
+};
+
+struct Signal {
+	int blockID;
+	std::vector<NPS::Pulse> pulses; // multiple pulses can be recorded in the same block
+	std::vector<double> samples;	// raw waveform signals
+};
+
+struct Cluster {
+	int id;
+	std::vector<NPS::Signal> signals; // signals from all blocks in the cluster
 };
 
 struct PairHash {
@@ -230,11 +247,128 @@ struct npsBranches {
 	double NPScorrUS_setCurr;
 };
 
+struct simBranches {
+	int evtNb;
+	std::array<double, 1080> edep;
+
+	bool phot1_hit;
+	double phot1_vx;
+	double phot1_vy;
+	double phot1_vz;
+	double phot1_hit_x;
+	double phot1_hit_y;
+	double phot1_hit_z;
+	int phot1_clustSize;
+	double phot1_clust_x;
+	double phot1_clust_y;
+	double phot1_clust_z;
+	double phot1_Ecal;
+
+	bool phot2_hit;
+	double phot2_vx;
+	double phot2_vy;
+	double phot2_vz;
+	double phot2_hit_x;
+	double phot2_hit_y;
+	double phot2_hit_z;
+	int phot2_clustSize;
+	double phot2_clust_x;
+	double phot2_clust_y;
+	double phot2_clust_z;
+	double phot2_Ecal;
+
+	int nClusters;
+	std::vector<double> *clust_E = nullptr;
+	std::vector<double> *clust_X = nullptr;
+	std::vector<double> *clust_Y = nullptr;
+	std::vector<int> *clust_Size = nullptr;
+	std::vector<double> *clust_Signals = nullptr;
+
+	// SIMC branches
+	float hsdelta;
+	float hsyptar;
+	float hsxptar;
+	float hsytar;
+	float hsxfp;
+	float hsxpfp;
+	float hsyfp;
+	float hsypfp;
+	float hsdeltai;
+	float hsyptari;
+	float hsxptari;
+	float hsytari;
+	float ssdelta;
+	float ssyptar;
+	float ssxptar;
+	float ssytar;
+	float ssxfp;
+	float ssxpfp;
+	float ssyfp;
+	float ssypfp;
+	float ssdeltai;
+	float ssyptari;
+	float ssxptari;
+	float ssytari;
+	float q;
+	float nu;
+	float Q2;
+	float W;
+	float epsilon;
+	float Em;
+	float Pm;
+	float thetapq;
+	float phipq;
+	float missmass;
+	float mmnuc;
+	float phad;
+	float t;
+	float pmpar;
+	float pmper;
+	float pmoop;
+	float fry;
+	float radphot;
+	float pfermi;
+	float siglab;
+	float sigcm;
+	float Weight;
+	float decdist;
+	float Mhadron;
+	float pdotqhat;
+	float Q2i;
+	float Wi;
+	float ti;
+	float phipqi;
+	float xcal_gamma1;
+	float ycal_gamma1;
+	float Egamma1;
+	float Pgamma1x;
+	float Pgamma1y;
+	float Pgamma1z;
+	float xcal_gamma2;
+	float ycal_gamma2;
+	float Egamma2;
+	float Pgamma2x;
+	float Pgamma2y;
+	float Pgamma2z;
+	float vtx_x;
+	float vtx_y;
+	float vtx_z;
+	float sc_e_E;
+	float sc_e_Px;
+	float sc_e_Py;
+	float sc_e_Pz;
+};
+
 void setBranchAddresses(TChain *&chain, npsBranches &buffer);
+
+void setBranchAddresses(TChain *&chain, simBranches &buffer);
+
 int readSignal(
 	int NSampWaveForm, const std::array<double, NPS::NDATA> &SampWaveForm, std::vector<int> &blocks,
 	std::vector<std::vector<double>> &signals
 );
+
+int readSimSignal(const std::vector<double> &clust_Signals, std::vector<NPS::Cluster> &clusters);
 
 } // namespace NPS
 

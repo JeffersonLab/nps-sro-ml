@@ -245,12 +245,114 @@ void setBranchAddresses(TChain *&chain, npsBranches &buffer) {
 	chain->SetBranchAddress("NPScorrUS_setCurr", &buffer.NPScorrUS_setCurr);
 }
 
-/**
- * Construct nodes from waveform signals
- * - read waveform from buffer.NPS_cal_fly_adcSampWaveform
- * - format: [block_id, n_samples, sample1, sample2, ..., block_id, n_samples, sample1, sample2, ...]
- * - each node corresponds to a block with its waveform as features
- */
+void setBranchAddresses(TChain *&chain, simBranches &buffer) {
+	chain->SetBranchAddress("evtNb", &buffer.evtNb);
+	chain->SetBranchAddress("edep", &buffer.edep[0]);
+	chain->SetBranchAddress("phot1_hit", &buffer.phot1_hit);
+	chain->SetBranchAddress("phot1_vx", &buffer.phot1_vx);
+	chain->SetBranchAddress("phot1_vy", &buffer.phot1_vy);
+	chain->SetBranchAddress("phot1_vz", &buffer.phot1_vz);
+	chain->SetBranchAddress("phot1_hit_x", &buffer.phot1_hit_x);
+	chain->SetBranchAddress("phot1_hit_y", &buffer.phot1_hit_y);
+	chain->SetBranchAddress("phot1_hit_z", &buffer.phot1_hit_z);
+	chain->SetBranchAddress("phot1_clust_x", &buffer.phot1_clust_x);
+	chain->SetBranchAddress("phot1_clust_y", &buffer.phot1_clust_y);
+	chain->SetBranchAddress("phot1_clust_z", &buffer.phot1_clust_z);
+	chain->SetBranchAddress("phot1_Ecal", &buffer.phot1_Ecal);
+	chain->SetBranchAddress("phot1_clustSize", &buffer.phot1_clustSize);
+	chain->SetBranchAddress("phot2_hit", &buffer.phot2_hit);
+	chain->SetBranchAddress("phot2_vx", &buffer.phot2_vx);
+	chain->SetBranchAddress("phot2_vy", &buffer.phot2_vy);
+	chain->SetBranchAddress("phot2_vz", &buffer.phot2_vz);
+	chain->SetBranchAddress("phot2_hit_x", &buffer.phot2_hit_x);
+	chain->SetBranchAddress("phot2_hit_y", &buffer.phot2_hit_y);
+	chain->SetBranchAddress("phot2_hit_z", &buffer.phot2_hit_z);
+	chain->SetBranchAddress("phot2_clust_x", &buffer.phot2_clust_x);
+	chain->SetBranchAddress("phot2_clust_y", &buffer.phot2_clust_y);
+	chain->SetBranchAddress("phot2_clust_z", &buffer.phot2_clust_z);
+	chain->SetBranchAddress("phot2_Ecal", &buffer.phot2_Ecal);
+	chain->SetBranchAddress("phot2_clustSize", &buffer.phot2_clustSize);
+	// Reconstructed Cluster branches
+	chain->SetBranchAddress("nClusters", &buffer.nClusters);
+	chain->SetBranchAddress("clust_E", &buffer.clust_E);
+	chain->SetBranchAddress("clust_X", &buffer.clust_X);
+	chain->SetBranchAddress("clust_Y", &buffer.clust_Y);
+	chain->SetBranchAddress("clust_Size", &buffer.clust_Size);
+	chain->SetBranchAddress("clust_Signals", &buffer.clust_Signals);
+	// SIMC branches
+	chain->SetBranchAddress("hsdelta", &buffer.hsdelta);
+	chain->SetBranchAddress("hsyptar", &buffer.hsyptar);
+	chain->SetBranchAddress("hsxptar", &buffer.hsxptar);
+	chain->SetBranchAddress("hsytar", &buffer.hsytar);
+	chain->SetBranchAddress("hsxfp", &buffer.hsxfp);
+	chain->SetBranchAddress("hsxpfp", &buffer.hsxpfp);
+	chain->SetBranchAddress("hsyfp", &buffer.hsyfp);
+	chain->SetBranchAddress("hsypfp", &buffer.hsypfp);
+	chain->SetBranchAddress("hsdeltai", &buffer.hsdeltai);
+	chain->SetBranchAddress("hsyptari", &buffer.hsyptari);
+	chain->SetBranchAddress("hsxptari", &buffer.hsxptari);
+	chain->SetBranchAddress("hsytari", &buffer.hsytari);
+	chain->SetBranchAddress("ssdelta", &buffer.ssdelta);
+	chain->SetBranchAddress("ssyptar", &buffer.ssyptar);
+	chain->SetBranchAddress("ssxptar", &buffer.ssxptar);
+	chain->SetBranchAddress("ssytar", &buffer.ssytar);
+	chain->SetBranchAddress("ssxfp", &buffer.ssxfp);
+	chain->SetBranchAddress("ssxpfp", &buffer.ssxpfp);
+	chain->SetBranchAddress("ssyfp", &buffer.ssyfp);
+	chain->SetBranchAddress("ssypfp", &buffer.ssypfp);
+	chain->SetBranchAddress("ssdeltai", &buffer.ssdeltai);
+	chain->SetBranchAddress("ssyptari", &buffer.ssyptari);
+	chain->SetBranchAddress("ssxptari", &buffer.ssxptari);
+	chain->SetBranchAddress("ssytari", &buffer.ssytari);
+	chain->SetBranchAddress("q", &buffer.q);
+	chain->SetBranchAddress("nu", &buffer.nu);
+	chain->SetBranchAddress("Q2", &buffer.Q2);
+	chain->SetBranchAddress("W", &buffer.W);
+	chain->SetBranchAddress("epsilon", &buffer.epsilon);
+	chain->SetBranchAddress("Em", &buffer.Em);
+	chain->SetBranchAddress("Pm", &buffer.Pm);
+	chain->SetBranchAddress("thetapq", &buffer.thetapq);
+	chain->SetBranchAddress("phipq", &buffer.phipq);
+	chain->SetBranchAddress("missmass", &buffer.missmass);
+	chain->SetBranchAddress("mmnuc", &buffer.mmnuc);
+	chain->SetBranchAddress("phad", &buffer.phad);
+	chain->SetBranchAddress("t", &buffer.t);
+	chain->SetBranchAddress("pmpar", &buffer.pmpar);
+	chain->SetBranchAddress("pmper", &buffer.pmper);
+	chain->SetBranchAddress("pmoop", &buffer.pmoop);
+	chain->SetBranchAddress("fry", &buffer.fry);
+	chain->SetBranchAddress("radphot", &buffer.radphot);
+	chain->SetBranchAddress("pfermi", &buffer.pfermi);
+	chain->SetBranchAddress("siglab", &buffer.siglab);
+	chain->SetBranchAddress("sigcm", &buffer.sigcm);
+	chain->SetBranchAddress("Weight", &buffer.Weight);
+	chain->SetBranchAddress("decdist", &buffer.decdist);
+	chain->SetBranchAddress("Mhadron", &buffer.Mhadron);
+	chain->SetBranchAddress("pdotqhat", &buffer.pdotqhat);
+	chain->SetBranchAddress("Q2i", &buffer.Q2i);
+	chain->SetBranchAddress("Wi", &buffer.Wi);
+	chain->SetBranchAddress("ti", &buffer.ti);
+	chain->SetBranchAddress("phipqi", &buffer.phipqi);
+	chain->SetBranchAddress("xcal_gamma1", &buffer.xcal_gamma1);
+	chain->SetBranchAddress("ycal_gamma1", &buffer.ycal_gamma1);
+	chain->SetBranchAddress("Egamma1", &buffer.Egamma1);
+	chain->SetBranchAddress("Pgamma1x", &buffer.Pgamma1x);
+	chain->SetBranchAddress("Pgamma1y", &buffer.Pgamma1y);
+	chain->SetBranchAddress("Pgamma1z", &buffer.Pgamma1z);
+	chain->SetBranchAddress("xcal_gamma2", &buffer.xcal_gamma2);
+	chain->SetBranchAddress("ycal_gamma2", &buffer.ycal_gamma2);
+	chain->SetBranchAddress("Egamma2", &buffer.Egamma2);
+	chain->SetBranchAddress("Pgamma2x", &buffer.Pgamma2x);
+	chain->SetBranchAddress("Pgamma2y", &buffer.Pgamma2y);
+	chain->SetBranchAddress("Pgamma2z", &buffer.Pgamma2z);
+	chain->SetBranchAddress("vtx_x", &buffer.vtx_x);
+	chain->SetBranchAddress("vtx_y", &buffer.vtx_y);
+	chain->SetBranchAddress("vtx_z", &buffer.vtx_z);
+	chain->SetBranchAddress("sc_e_E", &buffer.sc_e_E);
+	chain->SetBranchAddress("sc_e_Px", &buffer.sc_e_Px);
+	chain->SetBranchAddress("sc_e_Py", &buffer.sc_e_Py);
+	chain->SetBranchAddress("sc_e_Pz", &buffer.sc_e_Pz);
+}
 
 /**
  * @brief Parse waveform samples and construct block-level signals.
@@ -343,4 +445,50 @@ int readSignal(
 	return 0;
 }
 
+/**
+ * @brief Unpack simulation branch to fill vector of clusters.
+ *
+ * The input buffer encodes multiple blocks in the following linear format:
+ * @verbatim
+ *   [ cluster_id1, nblocks1, block_id1, npulses1, pulseE1, pulseTime1, ..., block_id2, ..., cluster_id2, nblocks2, ...
+ * ]
+ * @endverbatim
+ *
+ * @param[in]  clust_Signals  Raw waveform buffer containing cluster signals.
+ * @param[out] clusters       Vector of clusters parsed from the buffer.
+ *
+ * @return int
+ *   - 0 on successful parsing
+ *
+ * @post
+ *   The vectors @p clusters is cleared and repopulated with the parsed cluster information.
+ */
+int readSimSignal(const std::vector<double> &clust_Signals, std::vector<NPS::Cluster> &clusters) {
+	clusters.clear();
+	size_t n = 0;
+
+	while (n < clust_Signals.size()) {
+		NPS::Cluster clust;
+		clust.id = static_cast<int>(clust_Signals[n++]);
+		int nblocks = static_cast<int>(clust_Signals[n++]);
+
+		// Loop through all blocks belonging to this cluster
+		for (int i = 0; i < nblocks; ++i) {
+			NPS::Signal sig;
+			sig.blockID = static_cast<int>(clust_Signals[n++]);
+			int npulses = static_cast<int>(clust_Signals[n++]);
+
+			// Loop through all pulses in this specific block
+			for (int j = 0; j < npulses; ++j) {
+				NPS::Pulse pulse;
+				pulse.time = clust_Signals[n++];
+				pulse.energy = clust_Signals[n++];
+				sig.pulses.push_back(std::move(pulse));
+			}
+			clust.signals.push_back(std::move(sig));
+		}
+		clusters.push_back(std::move(clust));
+	}
+	return 0;
+}
 } // namespace NPS
