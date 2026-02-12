@@ -78,6 +78,9 @@ int main(int argc, char **argv) {
 
 		std::map<int, std::vector<double>> blockPulseMap;
 
+        int eventIndex = processedEntries % overlaps;
+        const double timeGap = 32.0; // assume each physics event is separated by
+
 		for (const auto &clust : clusters) {
 			for (const auto &sig : clust.signals) {
 
@@ -88,7 +91,7 @@ int main(int argc, char **argv) {
 
 				for (const auto &pulse : sig.pulses) {
 					blockPulseMap[blockID].push_back(pulse.energy);
-					blockPulseMap[blockID].push_back(pulse.time);
+					blockPulseMap[blockID].push_back(pulse.time + eventIndex * timeGap);
 				}
 			}
 		}
