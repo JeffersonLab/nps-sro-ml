@@ -33,10 +33,6 @@ argparse::ArgumentParser ARGS("VTP Reconstruction", "1.0");
 void saveGraph(const GraphUtils::GraphData &graphData, const std::string &output_file);
 bool isCorruptSignals(const std::vector<std::vector<double>> &signals);
 vtp_reco_evt buildVtpEventFromBuffer(NPS::npsBranches &buffer, NPS::Geometry &geometry);
-void find_matched_clusters(
-	std::unordered_map<int, std::vector<int>> &clusterIds, const vtp_reco_evt &recoEvent,
-	const vtp_reco_evt &vtpRawEvent, double energyDiff, double timeLow, double timeHigh
-);
 
 int main(int argc, char **argv) {
 	Addarguments(argc, argv);
@@ -50,9 +46,9 @@ int main(int argc, char **argv) {
 	const std::string vtpConfig = ARGS.get<std::string>("--vtp-config");
 	const std::string geoConfig = ARGS.get<std::string>("--geo-config");
 	const double energyDiff = ARGS.get<double>("--energy-diff");
+	const std::vector<double> timeWindow = ARGS.get<std::vector<double>>("--time-window");
 	const bool createEdges = ARGS.get<bool>("--edge-creation");
 	const std::string edgeAlgorithm = ARGS.get<std::string>("--edge-algorithm");
-	const std::vector<double> timeWindow = ARGS.get<std::vector<double>>("--time-window");
 	const bool debug = ARGS.get<bool>("--debug");
 
 	auto chain = new TChain(treeName.c_str());
@@ -71,7 +67,7 @@ int main(int argc, char **argv) {
 	fADC250 fadcDevice(NPS::NBLOCKS, vmeConfig);
 	VTP vtpDevice(NPS::NBLOCKS, NPS::NTIME, NPS::DELTA_T, vtpConfig);
 	NPS::Geometry geometry(geoConfig);
-	GraphUtils::GraphBuilder graphBuilder(NPS::NTIME, 0, 0, false, true);
+	GraphUtils::GraphBuilder graphBuilder(NPS::NTIME, 1, 0, 2, false, true, createEdges);
 
 	auto finishEvent = [&]() {
 		fadcDevice.resetEvent();
@@ -82,15 +78,18 @@ int main(int argc, char **argv) {
 
 	while (processedEntries < useEntries) {
 
-		// std::cout << "\rProcessing entry " << processedEntries + 1 << "/" << useEntries << std::endl;
 		int currEvent = startEntry + processedEntries;
 		chain->GetEntry(currEvent);
 		std::vector<std::vector<double>> signals; // [nblocks][ntime]
 		std::vector<int> blocks;				  // [nblocks]
+		std::unordered_map<int, int> blockToSignalIndex;
 
 		auto signalFlag = NPS::readSignal(
 			buffer.Ndata_NPS_cal_fly_adcSampWaveform, buffer.NPS_cal_fly_adcSampWaveform, blocks, signals
 		);
+		for (int i = 0; i < blocks.size(); i++) {
+			blockToSignalIndex[blocks[i]] = i;
+		}
 
 		if (signalFlag != 0) {
 			auto msg = Form("readSignal returned error code %d", signalFlag);
@@ -111,7 +110,6 @@ int main(int argc, char **argv) {
 			finishEvent();
 			continue;
 		}
-		graphBuilder.addNodes(blocks, signals);
 
 		for (int i = 0; i < blocks.size(); i++) {
 			auto channel = blocks[i];
@@ -151,25 +149,67 @@ int main(int argc, char **argv) {
 		auto recoEvent = vtpDevice.getEvent();
 		auto vtpEvent = buildVtpEventFromBuffer(buffer, geometry);
 
-		//
-		// TODO:
-		// HAVE NOT DEAL WITH OVERLAPPING CLUSTER YET, NEED A MAP FROM NODE ID TO BLOCK ID,
-		// SEE converter/standalone/sources/sim_data.cpp.
-		//
+		std::unordered_map<int, std::vector<int>> clustToNodeIds;
+		std::unordered_map<int, int> nodeToBlockId;
+		std::unordered_map<int, int> nodeToClusterId;
+		std::unordered_set<int> usedRecoIndices;
+		int nodeId = 0;
 
-		std::unordered_map<int, std::vector<int>> clusterIds;
-		find_matched_clusters(clusterIds, recoEvent, vtpEvent, energyDiff, timeWindow[0], timeWindow[1]);
+		auto sum = [](const std::vector<double> &vec) { return std::accumulate(vec.begin(), vec.end(), 0.0); };
+		for (int iclus = 0; iclus < vtpEvent.nseeds; iclus++) {
+			auto vtp_ch = vtpEvent.channels[iclus][0];	// vtp seed channel
+			auto vtp_e = sum(vtpEvent.energies[iclus]); // vtp cluster energy
+			auto vtp_time = vtpEvent.times[iclus][0];	// vtp seed time
+			auto vtp_size = vtpEvent.clus_sizes[iclus]; // vtp cluster size
 
-		for (const auto &[cid, nodes] : clusterIds) {
+			for (int i_reco = 0; i_reco < recoEvent.nseeds; i_reco++) {
+
+				if (usedRecoIndices.count(i_reco)) {
+					continue;
+				}
+
+				auto reco_ch = recoEvent.channels[i_reco][0];  // reco seed channel
+				auto reco_e = sum(recoEvent.energies[i_reco]); // reco cluster energy
+				auto reco_time = recoEvent.times[i_reco][0];   // reco seed time
+				auto reco_size = recoEvent.clus_sizes[i_reco]; // reco cluster size
+
+				bool match = (vtp_ch == reco_ch);
+				match &= (vtp_time == reco_time);
+				match &= (vtp_size == reco_size);
+				match &= (std::abs(vtp_e - reco_e) < energyDiff);
+
+				bool time_cut = (vtp_time >= timeWindow[0]) && (vtp_time <= timeWindow[1]);
+
+				if (match) {
+					usedRecoIndices.insert(i_reco);
+					if (time_cut) {
+						continue;
+					}
+
+					for (const auto &ch : recoEvent.channels[i_reco]) {
+						clustToNodeIds[iclus].push_back(nodeId);
+						nodeToBlockId[nodeId] = ch;
+						nodeToClusterId[nodeId] = iclus;
+						nodeId++;
+					}
+				}
+			}
+		}
+
+		for (const auto &[cid, nodes] : clustToNodeIds) {
 			for (int node_id : nodes) {
+				int blockId = nodeToBlockId[node_id];
+				int signalIndex = blockToSignalIndex[blockId];
+				graphBuilder.addNode(node_id, signals[signalIndex]);
+
 				graphBuilder.addNodeTarget(node_id, {static_cast<double>(cid)});
-				auto [col, row] = geometry.getColRowFromBlock(node_id);
+				auto [col, row] = geometry.getColRowFromBlock(blockId);
 				graphBuilder.addNodePosition(node_id, {static_cast<double>(col), static_cast<double>(row)});
 			}
 		}
 
 		if (createEdges) {
-			for (const auto &[cid, nodes] : clusterIds) {
+			for (const auto &[_, nodes] : clustToNodeIds) {
 				graphBuilder.addEdges(nodes, edgeAlgorithm);
 			}
 		}
@@ -230,53 +270,6 @@ vtp_reco_evt buildVtpEventFromBuffer(NPS::npsBranches &buffer, NPS::Geometry &ge
 		evt.energies.push_back({e});
 	}
 	return evt;
-}
-
-void find_matched_clusters(
-	std::unordered_map<int, std::vector<int>> &clusterIds, const vtp_reco_evt &recoEvent,
-	const vtp_reco_evt &vtpRawEvent, double energyDiff, double timeLow, double timeHigh
-) {
-
-	auto sum = [](const std::vector<double> &vec) { return std::accumulate(vec.begin(), vec.end(), 0.0); };
-
-	std::unordered_set<int> usedRecoIndices;
-
-	for (int iclus = 0; iclus < vtpRawEvent.nseeds; iclus++) {
-		auto vtp_ch = vtpRawEvent.channels[iclus][0];  // vtp seed channel
-		auto vtp_e = sum(vtpRawEvent.energies[iclus]); // vtp cluster energy
-		auto vtp_time = vtpRawEvent.times[iclus][0];   // vtp seed time
-		auto vtp_size = vtpRawEvent.clus_sizes[iclus]; // vtp cluster size
-
-		for (int i_reco = 0; i_reco < recoEvent.nseeds; i_reco++) {
-
-			if (usedRecoIndices.count(i_reco)) {
-				continue;
-			}
-
-			auto reco_ch = recoEvent.channels[i_reco][0];  // reco seed channel
-			auto reco_e = sum(recoEvent.energies[i_reco]); // reco cluster energy
-			auto reco_time = recoEvent.times[i_reco][0];   // reco seed time
-			auto reco_size = recoEvent.clus_sizes[i_reco]; // reco cluster size
-
-			bool match = (vtp_ch == reco_ch);
-			match &= (vtp_time == reco_time);
-			match &= (vtp_size == reco_size);
-			match &= (std::abs(vtp_e - reco_e) < energyDiff);
-
-			bool time_cut = (vtp_time >= timeLow) && (vtp_time <= timeHigh);
-
-			if (match) {
-				usedRecoIndices.insert(i_reco);
-				if (time_cut) {
-					continue;
-				}
-
-				for (const auto &ch : recoEvent.channels[i_reco]) {
-					clusterIds[iclus].push_back(ch);
-				}
-			}
-		}
-	}
 }
 
 void Addarguments(int argc, char **argv) {
