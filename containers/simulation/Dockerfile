@@ -52,6 +52,7 @@ RUN apt-get update && \
         libqt6opengl6-dev \
         tcsh \
         gfortran \
+        default-libmysqlclient-dev \
     && apt-get clean && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
 
@@ -111,11 +112,22 @@ ENV LD_LIBRARY_PATH="${DVCS_GEN_DIR}:${LD_LIBRARY_PATH}"
 ### ---------------------------------------------------------------------- ###
 ###          NPS Reconstruction Software (NPS_SOFT)                        ###
 ### ---------------------------------------------------------------------- ###
-ENV NPS_SOFT_DIR=${APP_ROOT}/NPS_SOFT
+ENV NPS_SOFT_DIR=${APP_ROOT}/NPS_SOFT \
+    DVCS_SOFT=${APP_ROOT}/NPS_SOFT
 
 RUN set -ex && \
     git clone --depth 1 https://github.com/hhuang-hep/NPS_SOFT.git "${NPS_SOFT_DIR}" && \
+    # Hall A Analyzer headers are needed for compilation (THaEvent.h, THaRun.h, etc.)
+    git clone --depth 1 --branch Release-1522 \
+        https://github.com/JeffersonLab/analyzer.git "${NPS_SOFT_DIR}/v0.65" && \
     cd "${NPS_SOFT_DIR}" && \
+    # Fix hardcoded absolute path to THaEvent.h (now found via -I include path)
+    sed -i 's|#include "/work/hallc/nps/hosan/analyzer-1.5.22/src/THaEvent.h"|#include "THaEvent.h"|' TDVCSGlobal.h && \
+    # Symlink analyzer headers into working dir so rootcint can also find them
+    ln -sf v0.65/src/THaEvent.h . && \
+    ln -sf v0.65/src/THaRun.h . && \
+    # Add missing TMath.h include in THCalo.cxx
+    sed -i '1i #include <TMath.h>' THCalo.cxx && \
     make biglib
 
 ENV LD_LIBRARY_PATH="${NPS_SOFT_DIR}:${LD_LIBRARY_PATH}"
@@ -127,8 +139,19 @@ ENV LD_LIBRARY_PATH="${NPS_SOFT_DIR}:${LD_LIBRARY_PATH}"
 ENV HALLC_NPS_DIR=${APP_ROOT}/HallC_NPS \
     HALLC_NPS_BLD=${APP_ROOT}/HallC_NPS/DVCS_evt_gen/build
 
+COPY RFunction.C /tmp/RFunction.C
+
 RUN set -ex && \
     git clone --depth 1 https://github.com/hhuang-hep/HallC_NPS.git "${HALLC_NPS_DIR}" && \
+    # Install HMS acceptance R-function (from JLab ifarm)
+    mkdir -p "${HALLC_NPS_DIR}/RFunction" && \
+    cp /tmp/RFunction.C "${HALLC_NPS_DIR}/RFunction/RFunction.C" && \
+    # Fix hardcoded JLab path in CMakeLists.txt to use local copy
+    sed -i 's|/work/hallc/nps/hosan/RFunction|'"${HALLC_NPS_DIR}"'/RFunction|' \
+        "${HALLC_NPS_DIR}/DVCS_evt_gen/DVCS/CMakeLists.txt" && \
+    # Add transitive deps of libDVCS.so (ROOT graphics/histogram + mysql)
+    echo 'target_link_libraries(DVCS Hist Graf Gpad mysqlclient)' \
+        >> "${HALLC_NPS_DIR}/DVCS_evt_gen/DVCS/CMakeLists.txt" && \
     mkdir -p "${HALLC_NPS_BLD}" && \
     bash -c 'source ${GEANT4_INS_PATH}/bin/geant4.sh && \
     cmake \
@@ -150,11 +173,10 @@ ENV ROOTSYS=${ROOTSYS:-/opt/root}
 RUN set -ex && \
     git clone --branch NPS --depth 1 https://github.com/YaopengZhang/mc-single-arm.git "${HMS_DIR}" && \
     cd "${HMS_DIR}/src" && \
-    make && \
-    cd "${HMS_DIR}/util/ntuple/" && \
-    make && \
+    make ROOTDIR="${ROOTSYS}" && \
+    # Skip util/ntuple (requires CERNLIB, legacy ntuple format — not needed)
     cd "${HMS_DIR}/util/root_tree/" && \
-    make
+    make ROOTDIR="${ROOTSYS}"
 
 
 ### ---------------------------------------------------------------------- ###
