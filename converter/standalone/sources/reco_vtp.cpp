@@ -33,10 +33,11 @@ argparse::ArgumentParser ARGS("VTP Reconstruction", "1.0");
 void saveGraph(const GraphUtils::GraphData &graphData, const std::string &output_file);
 bool isCorruptSignals(const std::vector<std::vector<double>> &signals);
 vtp_reco_evt buildVtpEventFromBuffer(NPS::npsBranches &buffer, NPS::Geometry &geometry);
-int buildTargetEdges(
-	GraphUtils::GraphBuilder &graphBuilder, const vtp_reco_evt &recoEvent, const vtp_reco_evt &vtpRawEvent,
-	double energyDiff, double timeLow, double timeHigh
+void find_matched_clusters(
+	std::unordered_map<int, std::vector<int>> &clusterIds, const vtp_reco_evt &recoEvent,
+	const vtp_reco_evt &vtpRawEvent, double energyDiff, double timeLow, double timeHigh
 );
+
 int main(int argc, char **argv) {
 	Addarguments(argc, argv);
 
@@ -49,6 +50,8 @@ int main(int argc, char **argv) {
 	const std::string vtpConfig = ARGS.get<std::string>("--vtp-config");
 	const std::string geoConfig = ARGS.get<std::string>("--geo-config");
 	const double energyDiff = ARGS.get<double>("--energy-diff");
+	const bool createEdges = ARGS.get<bool>("--edge-creation");
+	const std::string edgeAlgorithm = ARGS.get<std::string>("--edge-algorithm");
 	const std::vector<double> timeWindow = ARGS.get<std::vector<double>>("--time-window");
 	const bool debug = ARGS.get<bool>("--debug");
 
@@ -147,12 +150,32 @@ int main(int argc, char **argv) {
 
 		auto recoEvent = vtpDevice.getEvent();
 		auto vtpEvent = buildVtpEventFromBuffer(buffer, geometry);
-		auto nClust = buildTargetEdges(graphBuilder, recoEvent, vtpEvent, energyDiff, timeWindow[0], timeWindow[1]);
+
+		//
+		// TODO:
+		// HAVE NOT DEAL WITH OVERLAPPING CLUSTER YET, NEED A MAP FROM NODE ID TO BLOCK ID,
+		// SEE converter/standalone/sources/sim_data.cpp.
+		//
+
+		std::unordered_map<int, std::vector<int>> clusterIds;
+		find_matched_clusters(clusterIds, recoEvent, vtpEvent, energyDiff, timeWindow[0], timeWindow[1]);
+
+		for (const auto &[cid, nodes] : clusterIds) {
+			for (int node_id : nodes) {
+				graphBuilder.addNodeTarget(node_id, {static_cast<double>(cid)});
+				auto [col, row] = geometry.getColRowFromBlock(node_id);
+				graphBuilder.addNodePosition(node_id, {static_cast<double>(col), static_cast<double>(row)});
+			}
+		}
+
+		if (createEdges) {
+			for (const auto &[cid, nodes] : clusterIds) {
+				graphBuilder.addEdges(nodes, edgeAlgorithm);
+			}
+		}
 
 		// Build graph and save tensors
 		auto graphData = graphBuilder.buildGraph();
-		auto components = GraphUtils::getConnectedComponents(graphData.edgeTargetIndex);
-		assert(components.size() == nClust);
 		saveGraph(graphData, Form("%s/%08d.pt", outputDir.c_str(), savedEvents));
 		finishEvent();
 		savedEvents++;
@@ -165,20 +188,14 @@ int main(int argc, char **argv) {
 }
 
 void saveGraph(const GraphUtils::GraphData &graphData, const std::string &outputFile) {
-
-	auto nodeIds = TorchUtils::toTensor(graphData.nodeIds);				// [num_nodes]
-	auto nodeFeatures = TorchUtils::toTensor2D(graphData.nodeFeatures); // [num_nodes][num_node_features]
-	auto nodeTargets = TorchUtils::toTensor2D(graphData.nodeTargets);	// [num_nodes][num_targets]
-	auto edgeFeatures = TorchUtils::toTensor2D(graphData.edgeFeatures); // [num_edges][num_edge_features]
-	auto edgeTargetFeatures =
-		TorchUtils::toTensor2D(graphData.edgeTargetFeatures);	  // [num_target_edges][num_target_edge_features]
-	auto edgeIndex = TorchUtils::toTensor2D(graphData.edgeIndex); // [2][num_edges]
-	auto edgeTargetIndex = TorchUtils::toTensor2D(graphData.edgeTargetIndex); // [2][num_target_edges]
+	auto nodeFeatures = TorchUtils::toTensor2D(graphData.nodeFeatures);		// [num_nodes][num_node_features]
+	auto nodeTargets = TorchUtils::toTensor2D(graphData.nodeTargets);		// [num_nodes][num_targets]
+	auto edgeAttributes = TorchUtils::toTensor2D(graphData.edgeAttributes); // [num_edges][num_edge_features]
+	auto edgeIndex = TorchUtils::toTensor2D(graphData.edgeIndex);			// [2][num_edges]
+	auto nodePositions = TorchUtils::toTensor2D(graphData.nodePositions);	// [num_nodes][num_dimensions]
 
 	std::filesystem::create_directories(std::filesystem::path(outputFile).parent_path());
-	TorchUtils::saveTensors(
-		outputFile, nodeIds, nodeFeatures, nodeTargets, edgeFeatures, edgeTargetFeatures, edgeIndex, edgeTargetIndex
-	);
+	TorchUtils::saveTensors(outputFile, nodeFeatures, edgeIndex, edgeAttributes, nodeTargets, nodePositions);
 }
 
 bool isCorruptSignals(const std::vector<std::vector<double>> &signals) {
@@ -215,9 +232,9 @@ vtp_reco_evt buildVtpEventFromBuffer(NPS::npsBranches &buffer, NPS::Geometry &ge
 	return evt;
 }
 
-int buildTargetEdges(
-	GraphUtils::GraphBuilder &graphBuilder, const vtp_reco_evt &recoEvent, const vtp_reco_evt &vtpRawEvent,
-	double energyDiff, double timeLow, double timeHigh
+void find_matched_clusters(
+	std::unordered_map<int, std::vector<int>> &clusterIds, const vtp_reco_evt &recoEvent,
+	const vtp_reco_evt &vtpRawEvent, double energyDiff, double timeLow, double timeHigh
 ) {
 
 	auto sum = [](const std::vector<double> &vec) { return std::accumulate(vec.begin(), vec.end(), 0.0); };
@@ -255,14 +272,11 @@ int buildTargetEdges(
 				}
 
 				for (const auto &ch : recoEvent.channels[i_reco]) {
-					if (ch != reco_ch) {
-						graphBuilder.addEdgeTarget(reco_ch, ch);
-					}
+					clusterIds[iclus].push_back(ch);
 				}
 			}
 		}
 	}
-	return usedRecoIndices.size();
 }
 
 void Addarguments(int argc, char **argv) {
@@ -300,6 +314,13 @@ void Addarguments(int argc, char **argv) {
 	ARGS.add_argument("--geo-config")
 		.default_value(std::string("database/channel_map.csv"))
 		.help("NPS Geometry config file")
+		.required();
+
+	ARGS.add_argument("--edge-creation").help("whether to create edges or not").flag();
+
+	ARGS.add_argument("--edge-algorithm")
+		.help("algorithm to create edges (fully_connected, center_to_neighbor, etc.)")
+		.default_value(std::string("fully_connected"))
 		.required();
 
 	ARGS.add_argument("--energy-diff")
