@@ -209,3 +209,5 @@ __marimo__/
 .idea/
 
 docs/.vitepress/cache/
+
+containers/simulation/.claude/
