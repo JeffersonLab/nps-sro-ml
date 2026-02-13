@@ -27,7 +27,6 @@ argparse::ArgumentParser ARGS("NPS_DataConvertor", "1.0");
 
 void saveGraph(const GraphUtils::GraphData &graphData, const std::string &output_file);
 bool isCorruptSignals(const std::vector<std::vector<double>> &signals);
-void build_target_edges(GraphUtils::GraphBuilder &builder, std::unordered_map<int, std::vector<int>> &clusterIds);
 void buildClusterIdMap(
 	int nBlocks, const double *clusterIdArray, std::unordered_map<int, std::vector<int>> &clusterIdsMap
 );
@@ -41,6 +40,9 @@ int main(int argc, char **argv) {
 	const auto inputFiles = ARGS.get<std::vector<std::string>>("--input-files");
 	const std::string outputDir = ARGS.get<std::string>("--output-dir");
 	const std::string treeName = ARGS.get<std::string>("--tree-name");
+	const std::string geoConfig = ARGS.get<std::string>("--geo-config");
+	const bool createEdges = ARGS.get<bool>("--edge-creation");
+	const std::string edgeAlgorithm = ARGS.get<std::string>("--edge-algorithm");
 	const int clusMin = ARGS.get<int>("--clus-min");
 	const int clusMax = ARGS.get<int>("--clus-max");
 	const int sigMin = ARGS.get<int>("--sig-min");
@@ -53,6 +55,8 @@ int main(int argc, char **argv) {
 	}
 	auto entries = chain->GetEntries();
 
+	NPS::Geometry geometry(geoConfig);
+
 	NPS::npsBranches buffer;
 	NPS::setBranchAddresses(chain, buffer);
 
@@ -60,7 +64,7 @@ int main(int argc, char **argv) {
 	int savedEvents = 0;
 	int useEntries = readEntries < 0 ? chain->GetEntries() : std::min(readEntries, (int)chain->GetEntries());
 
-	GraphUtils::GraphBuilder graphBuilder(NPS::NTIME, 0, 0, false, true);
+	GraphUtils::GraphBuilder graphBuilder(NPS::NTIME, 1, 0, 2, false, true, createEdges);
 
 	auto finishEvent = [&]() {
 		graphBuilder.reset();
@@ -102,9 +106,28 @@ int main(int argc, char **argv) {
 		}
 
 		graphBuilder.addNodes(blocks, signals);
+
+		for (const auto &block : blocks) {
+			auto [col, row] = geometry.getColRowFromBlock(block);
+			graphBuilder.addNodePosition(block, {static_cast<double>(col), static_cast<double>(row)});
+		}
+
 		std::unordered_map<int, std::vector<int>> clusterIds;
 		buildClusterIdMap(buffer.Ndata_NPS_cal_fly_block_clusterID, &buffer.NPS_cal_fly_block_clusterID[0], clusterIds);
-		build_target_edges(graphBuilder, clusterIds);
+
+		// There is no overlapping clusters in this dataset, so each cluster corresponds to one connected component. We
+		// can directly use cluster ID as node target without building connected components.
+		for (const auto &[cid, nodes] : clusterIds) {
+			for (int node_id : nodes) {
+				graphBuilder.addNodeTarget(node_id, {static_cast<double>(cid)});
+			}
+		}
+
+		if (createEdges) {
+			for (const auto &[cid, nodes] : clusterIds) {
+				graphBuilder.addEdges(nodes, edgeAlgorithm);
+			}
+		}
 
 		// Apply event selection based on number of clusters and signals
 		int nClust = clusterIds.size();
@@ -125,8 +148,11 @@ int main(int argc, char **argv) {
 
 		// Build graph and save tensors
 		auto graphData = graphBuilder.buildGraph();
-		auto components = GraphUtils::getConnectedComponents(graphData.edgeTargetIndex);
-		assert(components.size() == nClust);
+		if (debug && createEdges) {
+			// this is only valid if there is no overlapping clusters.
+			auto components = GraphUtils::getConnectedComponents(graphData.edgeIndex);
+			assert(components.size() == nClust);
+		}
 		saveGraph(graphData, Form("%s/%08d.pt", outputDir.c_str(), savedEvents));
 		finishEvent();
 		savedEvents++;
@@ -139,20 +165,14 @@ int main(int argc, char **argv) {
 }
 
 void saveGraph(const GraphUtils::GraphData &graphData, const std::string &outputFile) {
-
-	auto nodeIds = TorchUtils::toTensor(graphData.nodeIds);				// [num_nodes]
-	auto nodeFeatures = TorchUtils::toTensor2D(graphData.nodeFeatures); // [num_nodes][num_node_features]
-	auto nodeTargets = TorchUtils::toTensor2D(graphData.nodeTargets);	// [num_nodes][num_targets]
-	auto edgeFeatures = TorchUtils::toTensor2D(graphData.edgeFeatures); // [num_edges][num_edge_features]
-	auto edgeTargetFeatures =
-		TorchUtils::toTensor2D(graphData.edgeTargetFeatures);	  // [num_target_edges][num_target_edge_features]
-	auto edgeIndex = TorchUtils::toTensor2D(graphData.edgeIndex); // [2][num_edges]
-	auto edgeTargetIndex = TorchUtils::toTensor2D(graphData.edgeTargetIndex); // [2][num_target_edges]
+	auto nodeFeatures = TorchUtils::toTensor2D(graphData.nodeFeatures);		// [num_nodes][num_node_features]
+	auto nodeTargets = TorchUtils::toTensor2D(graphData.nodeTargets);		// [num_nodes][num_targets]
+	auto edgeAttributes = TorchUtils::toTensor2D(graphData.edgeAttributes); // [num_edges][num_edge_features]
+	auto edgeIndex = TorchUtils::toTensor2D(graphData.edgeIndex);			// [2][num_edges]
+	auto nodePositions = TorchUtils::toTensor2D(graphData.nodePositions);	// [num_nodes][num_dimensions]
 
 	std::filesystem::create_directories(std::filesystem::path(outputFile).parent_path());
-	TorchUtils::saveTensors(
-		outputFile, nodeIds, nodeFeatures, nodeTargets, edgeFeatures, edgeTargetFeatures, edgeIndex, edgeTargetIndex
-	);
+	TorchUtils::saveTensors(outputFile, nodeFeatures, edgeIndex, edgeAttributes, nodeTargets, nodePositions);
 }
 
 bool isCorruptSignals(const std::vector<std::vector<double>> &signals) {
@@ -160,22 +180,6 @@ bool isCorruptSignals(const std::vector<std::vector<double>> &signals) {
 	corrupt |= signals.size() == 0;
 	corrupt |= signals.size() > 0 && signals[0].size() != NPS::NTIME;
 	return corrupt;
-}
-
-void build_target_edges(GraphUtils::GraphBuilder &builder, std::unordered_map<int, std::vector<int>> &clusterIds) {
-	for (const auto &[cid, blockList] : clusterIds) {
-		// self-loop for single-block clusters
-		if (blockList.size() == 1) {
-			builder.addEdgeTarget(blockList[0], blockList[0]);
-		} else {
-			// fully connect the blocks in the same cluster
-			for (size_t i = 0; i < blockList.size(); i++) {
-				for (size_t j = i + 1; j < blockList.size(); j++) {
-					builder.addEdgeTarget(blockList[i], blockList[j]);
-				}
-			}
-		}
-	}
 }
 
 void buildClusterIdMap(
@@ -222,8 +226,19 @@ void addArguments(int argc, char **argv) {
 		.default_value(-1)
 		.scan<'i', int>();
 
+	ARGS.add_argument("--edge-creation").help("whether to create edges or not").flag();
+
+	ARGS.add_argument("--edge-algorithm")
+		.help("algorithm to create edges (fully_connected, center_to_neighbor, etc.)")
+		.default_value(std::string("fully_connected"))
+		.required();
+
 	ARGS.add_argument("--start-event").help("starting event number").default_value(0).scan<'i', int>();
 
+	ARGS.add_argument("--geo-config")
+		.default_value(std::string("database/channel_map.csv"))
+		.help("NPS Geometry config file")
+		.required();
 	ARGS.add_argument("--clus-min")
 		.help("minimum number of clusters to consider event")
 		.default_value(0)
