@@ -28,15 +28,20 @@ void addArguments(int argc, char **argv);
 argparse::ArgumentParser ARGS("Simulation_Data", "1.0");
 
 void saveGraph(const GraphUtils::GraphData &graphData, const std::string &outputFile);
+void build_target_edges(GraphUtils::GraphBuilder &builder, std::unordered_map<int, std::vector<int>> &clusterIds);
 int main(int argc, char **argv) {
 	addArguments(argc, argv);
 
 	const int readEntries = ARGS.get<int>("--n-events");
 	const int startEntry = ARGS.get<int>("--start-event");
 	const auto inputFiles = ARGS.get<std::vector<std::string>>("--input-files");
+	const int overlaps = ARGS.get<int>("--overlaps");
+	const double timeGap = ARGS.get<double>("--dt");
 	const std::string outputDir = ARGS.get<std::string>("--output-dir");
 	const std::string geoConfig = ARGS.get<std::string>("--geo-config");
 	const std::string treeName = ARGS.get<std::string>("--tree-name");
+	const bool createEdges = ARGS.get<bool>("--edge-creation");
+	const std::string edgeAlgorithm = ARGS.get<std::string>("--edge-algorithm");
 	const bool debug = ARGS.get<bool>("--debug");
 
 	auto chain = new TChain(treeName.c_str());
@@ -54,11 +59,13 @@ int main(int argc, char **argv) {
 	int savedEvents = 0;
 	int useEntries = readEntries < 0 ? chain->GetEntries() : std::min(readEntries, (int)chain->GetEntries());
 
-	const int overlaps = 5;		  // always overlap 5 events
 	const int nfeat_perPulse = 2; // energy and time
 	const int nclus_perEvent = 2; // only 2 photons in each geant4 event, so at most 2 clusters
 	int maxPulses = overlaps * nfeat_perPulse * nclus_perEvent;
-	GraphUtils::GraphBuilder graphBuilder(maxPulses, 0, 0, false, true);
+	GraphUtils::GraphBuilder graphBuilder(maxPulses, 1, 0, 2, false, true, createEdges);
+
+	// buffer for overlapping events
+	std::vector<NPS::Cluster> clusters;
 
 	while (processedEntries < useEntries) {
 
@@ -73,44 +80,69 @@ int main(int argc, char **argv) {
 		auto clust_E = buffer.clust_E->data();
 		auto clust_Size = buffer.clust_Size->data();
 
-		std::vector<NPS::Cluster> clusters;
-		NPS::readSimSignal(*(buffer.clust_Signals), clusters);
+		std::vector<NPS::Cluster> clusters_buffer;
+		NPS::readSimSignal(*(buffer.clust_Signals), clusters_buffer);
+		clusters.insert(clusters.end(), clusters_buffer.begin(), clusters_buffer.end());
 
-		std::map<int, std::vector<double>> blockPulseMap;
-
-        int eventIndex = processedEntries % overlaps;
-        const double timeGap = 32.0; // assume each physics event is separated by
-
-		for (const auto &clust : clusters) {
-			for (const auto &sig : clust.signals) {
-
-				int blockID_ = sig.blockID; // blockID in Geant4 is different
-				int col = blockID_ / NPS::NROWS;
-				int row = blockID_ % NPS::NROWS;
-				int blockID = geometry.getBlockFromColRow(col, row); // convert to blockID in hcana
-
-				for (const auto &pulse : sig.pulses) {
-					blockPulseMap[blockID].push_back(pulse.energy);
-					blockPulseMap[blockID].push_back(pulse.time + eventIndex * timeGap);
-				}
-			}
-		}
+		int eventIndex = processedEntries % overlaps;
 
 		processedEntries++;
 
-		if ((processedEntries) % overlaps == 0) {
+		if (processedEntries % overlaps == 0) {
 
-			for (auto &[blockID, pulseInfo] : blockPulseMap) {
-				int arrSize = pulseInfo.size();
-				assert(maxPulses >= pulseInfo.size());
-				pulseInfo.resize(maxPulses, 0.0); // padded 0
-				graphBuilder.addNode(blockID, pulseInfo);
+			// build graph for the current set of overlapping events
+			std::unordered_map<int, std::vector<int>> clustToNodeIds;
+
+			std::map<int, std::vector<double>>
+				blockPulseMap; // blockID to [energy, time, energy, time, ...] for all pulses
+
+			std::unordered_map<int, int> nodeToBlockId;
+			std::unordered_map<int, int> nodeToClusterId;
+
+			int nodeId = 0;
+			for (size_t i = 0; i < clusters.size(); i++) {
+				const auto &cluster = clusters[i];
+
+				for (const auto &signal : cluster.signals) {
+					int blockId_ = signal.blockID;
+					auto [col, row] = geometry.getColRowFromBlock(blockId_);
+					int blockId = geometry.getBlockFromColRow(col, row);
+
+					clustToNodeIds[i + 1].push_back(nodeId);
+					nodeToBlockId[nodeId] = blockId;
+					nodeToClusterId[nodeId] = i + 1;
+					nodeId++;
+
+					for (const auto &pulse : signal.pulses) {
+						blockPulseMap[blockId].push_back(pulse.energy);
+						blockPulseMap[blockId].push_back(pulse.time);
+					}
+				}
+			}
+
+			for (const auto &[nodeId, blockId] : nodeToBlockId) {
+				assert(maxPulses >= blockPulseMap[blockId].size()); // ensure we have enough features to hold all pulses
+				blockPulseMap[blockId].resize(maxPulses, 0.0);
+				graphBuilder.addNode(nodeId, blockPulseMap[blockId]);
+				auto [col, row] = geometry.getColRowFromBlock(blockId);
+				graphBuilder.addNodePosition(nodeId, {static_cast<double>(col), static_cast<double>(row)});
+				graphBuilder.addNodeTarget(nodeId, {static_cast<double>(nodeToClusterId[nodeId])});
+			}
+
+			if (createEdges) {
+				for (const auto &[cid, nodes] : clustToNodeIds) {
+					graphBuilder.addEdges(nodes, edgeAlgorithm);
+				}
 			}
 
 			auto graphData = graphBuilder.buildGraph();
 			saveGraph(graphData, Form("%s/%08d.pt", outputDir.c_str(), savedEvents));
+			if (debug && savedEvents == 0) {
+				graphBuilder.PrintGraph();
+			}
 			savedEvents++;
 			graphBuilder.reset();
+			clusters.clear();
 		};
 	}
 
@@ -118,20 +150,14 @@ int main(int argc, char **argv) {
 }
 
 void saveGraph(const GraphUtils::GraphData &graphData, const std::string &outputFile) {
-
-	auto nodeIds = TorchUtils::toTensor(graphData.nodeIds);				// [num_nodes]
-	auto nodeFeatures = TorchUtils::toTensor2D(graphData.nodeFeatures); // [num_nodes][num_node_features]
-	auto nodeTargets = TorchUtils::toTensor2D(graphData.nodeTargets);	// [num_nodes][num_targets]
-	auto edgeFeatures = TorchUtils::toTensor2D(graphData.edgeFeatures); // [num_edges][num_edge_features]
-	auto edgeTargetFeatures =
-		TorchUtils::toTensor2D(graphData.edgeTargetFeatures);	  // [num_target_edges][num_target_edge_features]
-	auto edgeIndex = TorchUtils::toTensor2D(graphData.edgeIndex); // [2][num_edges]
-	auto edgeTargetIndex = TorchUtils::toTensor2D(graphData.edgeTargetIndex); // [2][num_target_edges]
+	auto nodeFeatures = TorchUtils::toTensor2D(graphData.nodeFeatures);		// [num_nodes][num_node_features]
+	auto nodeTargets = TorchUtils::toTensor2D(graphData.nodeTargets);		// [num_nodes][num_targets]
+	auto edgeAttributes = TorchUtils::toTensor2D(graphData.edgeAttributes); // [num_edges][num_edge_features]
+	auto edgeIndex = TorchUtils::toTensor2D(graphData.edgeIndex);			// [2][num_edges]
+	auto nodePositions = TorchUtils::toTensor2D(graphData.nodePositions);	// [num_nodes][num_dimensions]
 
 	std::filesystem::create_directories(std::filesystem::path(outputFile).parent_path());
-	TorchUtils::saveTensors(
-		outputFile, nodeIds, nodeFeatures, nodeTargets, edgeFeatures, edgeTargetFeatures, edgeIndex, edgeTargetIndex
-	);
+	TorchUtils::saveTensors(outputFile, nodeFeatures, edgeIndex, edgeAttributes, nodeTargets, nodePositions);
 }
 
 void addArguments(int argc, char **argv) {
@@ -153,6 +179,20 @@ void addArguments(int argc, char **argv) {
 		.help("number of events to process, -1 for all")
 		.default_value(-1)
 		.scan<'i', int>();
+
+	ARGS.add_argument("--overlaps")
+		.help("number of overlapping events to mix together")
+		.default_value(5)
+		.scan<'i', int>();
+
+	ARGS.add_argument("--dt").help("time gap between overlapping events in ns").default_value(32.0).scan<'g', double>();
+
+	ARGS.add_argument("--edge-creation").help("whether to create edges or not").flag();
+
+	ARGS.add_argument("--edge-algorithm")
+		.help("algorithm to create edges (fully_connected, center_to_neighbor, etc.)")
+		.default_value(std::string("fully_connected"))
+		.required();
 
 	ARGS.add_argument("--start-event").help("starting event number").default_value(0).scan<'i', int>();
 
