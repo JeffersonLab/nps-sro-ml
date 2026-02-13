@@ -1,12 +1,15 @@
 import logging
+import pathlib
 import torch
 from base.trainer import BaseTrainer
 from base.model import BaseModel
 from base.dataloader import BaseDataLoader
 from base.scaler import BaseScaler
-from typing import Optional
+from typing import Dict, Optional
+import pandas as pd
 from utils.graph import find_connected_components_undirected
 from models.oc_loss import oc_loss_per_batch
+from datasets.nps import get_node_index_from_position, get_position_from_node_index
 
 
 def create_sample_mask(
@@ -79,6 +82,8 @@ class ObjectCondensationTrainer(BaseTrainer):
         valid_dataloader: Optional[BaseDataLoader] = None,
         lr_scheduler: Optional[torch.optim.lr_scheduler.LRScheduler] = None,
         logger: Optional[logging.Logger] = None,
+        vme_config: Optional[pathlib.Path] = None,
+        vtp_config: Optional[pathlib.Path] = None,
     ):
         super().__init__(model, optimizer, config, logger)
 
@@ -88,20 +93,118 @@ class ObjectCondensationTrainer(BaseTrainer):
         self.device = device
         self.do_validation = self.valid_dataloader is not None
 
+        # for pre-processing waveform depending on the inputs
+        self.vme_config = self._load_vme_config(vme_config)
+        self.vtp_config = self._load_vtp_config(vtp_config)
+
         # signal normalization
         self.scaler = scaler
         if scaler is not None:
             self.logger.info("Fitting scaler on training data...")
-            self.scaler.fit(
-                torch.cat([data.x for data in self.dataloader.dataset], dim=0)
-            )
-            self.scaler.to(self.device)
-            self.logger.info("Scaler fitted.")
+            self.scaler = self._prescale_waveform()
 
     def _progress(self, batch_idx):
         base = '[{}/{} ({:.0f}%)]'
         total = len(self.dataloader)
         return base.format(batch_idx, total, 100.0 * batch_idx / total)
+
+    def _load_config(self, path: Optional[pathlib.Path]) -> Dict[str, torch.Tensor]:
+        """
+        Load configuration CSV and return a dict of tensors keyed by column name (excluding 'channel').
+
+        Parameters
+        ----------
+        path : pathlib.Path or None
+            Path to CSV file. If None, returns empty dict.
+
+        Returns
+        -------
+        Dict[str, torch.Tensor]
+            Mapping from config field name to 1D float32 tensor.
+        """
+        if path is None:
+            return {}
+
+        path = pathlib.Path(path)
+        if not path.exists():
+            raise FileNotFoundError(f"Config file not found: {path}")
+
+        df = pd.read_csv(path)
+
+        if "channel" not in df.columns:
+            raise ValueError("CSV must contain a 'channel' column")
+
+        config: Dict[str, torch.Tensor] = {}
+
+        for col in df.columns:
+            if col == "channel":
+                continue
+
+            values = df[col].to_numpy(dtype="float32", copy=False)
+            config[col] = torch.from_numpy(values)
+
+        return config
+
+    def _load_vtp_config(self, path: Optional[pathlib.Path]) -> Dict[str, torch.Tensor]:
+        return self._load_config(path)
+
+    def _load_vme_config(self, path: Optional[pathlib.Path]) -> Dict[str, torch.Tensor]:
+        return self._load_config(path)
+
+    def _process_waveform(
+        self, wf: torch.Tensor, channels: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Pre-process waveform based on VME configuration. Subtract pedestal if specified.
+
+        Parameters
+        ----------
+        wf: torch.Tensor
+            Input waveform tensor of shape [N, L], where N is number of nodes, L is waveform length.
+
+        channels : torch.Tensor
+            Tensor of shape [N,] indicating the channel index for each waveform.
+
+        Returns
+        -------
+        torch.Tensor
+            Processed waveform tensor of shape [N, L].
+        """
+        if self.vme_config is None:
+            return wf
+
+        ped = self.vme_config.get("FADC250_ALLCH_PED", torch.zeros(wf.shape))
+        if ped.ndim == 1:
+            ped = ped.unsqueeze(-1)  # match wf shape if needed
+
+        if channels.shape[0] != wf.shape[0]:
+            raise ValueError(
+                f"Channels tensor length ({channels.shape[0]}) does not match number of waveforms ({wf.shape[0]})."
+            )
+
+        if wf.shape[0] > ped.shape[0]:
+            raise ValueError(
+                f"Number of channels in waveform ({wf.shape[0]}) exceeds pedestal size ({ped.shape[0]})."
+            )
+
+        wf = wf - ped.to(wf.device)[channels.long()]
+        return wf
+
+    def _prescale_waveform(self) -> torch.Tensor:
+
+        self.logger.info("Fitting scaler on training data...")
+        buffer = []
+        for data in self.dataloader.dataset:
+            pos = data.pos
+            channels = get_node_index_from_position(pos[:, 0], pos[:, 1])
+            x = self._process_waveform(data.x, channels)
+            buffer.append(x)
+
+        all_waveforms = torch.cat(buffer, dim=0)
+        self.scaler.fit(all_waveforms)
+        self.scaler.to(self.device)
+        self.logger.info("Scaler fitted.")
+        return self.scaler
 
     def _train_epoch(self, epoch):
 
@@ -113,9 +216,12 @@ class ObjectCondensationTrainer(BaseTrainer):
             self.optimizer.zero_grad()
             data = data.to(self.device)
 
-            x = self.scaler(data.x) if self.scaler is not None else data.x
             pos = data.pos
             edge_index = data.edge_index
+            channels = get_node_index_from_position(pos[:, 0], pos[:, 1])
+            x = self._process_waveform(data.x, channels)
+
+            x = self.scaler(x) if self.scaler is not None else x
             batch = data.batch if hasattr(data, 'batch') else None
 
             components = find_connected_components_undirected(x.size(0), edge_index)
@@ -199,9 +305,12 @@ class ObjectCondensationTrainer(BaseTrainer):
         with torch.no_grad():
             for batch_idx, data in enumerate(self.valid_dataloader):
                 data = data.to(self.device)
-                x = self.scaler(data.x) if self.scaler is not None else data.x
+
                 pos = data.pos
                 edge_index = data.edge_index
+                channels = get_node_index_from_position(pos[:, 0], pos[:, 1])
+                x = self._process_waveform(data.x, channels)
+                x = self.scaler(x) if self.scaler is not None else x
                 batch = data.batch if hasattr(data, 'batch') else None
 
                 components = find_connected_components_undirected(x.size(0), edge_index)
