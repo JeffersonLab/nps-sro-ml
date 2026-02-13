@@ -14,13 +14,14 @@
 namespace GraphUtils {
 
 struct GraphData {
-	std::vector<int> nodeIds;
-	std::vector<std::vector<double>> nodeFeatures;		 // [num_nodes][num_node_features]
-	std::vector<std::vector<double>> nodeTargets;		 // [num_nodes][num_targets]
-	std::vector<std::vector<double>> edgeFeatures;		 // [num_edges][num_edge_features]
-	std::vector<std::vector<double>> edgeTargetFeatures; // [num_target_edges][num_edge_target_features]
-	std::vector<std::vector<int>> edgeIndex;			 // [2][num_edges]
-	std::vector<std::vector<int>> edgeTargetIndex;		 // [2][num_target_edges]
+	// data structure analogous to PyG's Data object, see
+	// https://pytorch-geometric.readthedocs.io/en/2.6.1/get_started/introduction.html#data-handling-of-graphs.
+
+	std::vector<std::vector<double>> nodeFeatures;	 // [num_nodes][num_node_features]
+	std::vector<std::vector<int>> edgeIndex;		 // [2][num_edges]
+	std::vector<std::vector<double>> edgeAttributes; // [num_edges][num_edge_features]
+	std::vector<std::vector<double>> nodeTargets;	 // [num_nodes][num_targets]
+	std::vector<std::vector<double>> nodePositions;	 //[num_nodes][num_dimensions]
 };
 
 int countNodes(const std::vector<std::vector<int>> &edgeIndex);
@@ -31,59 +32,60 @@ std::vector<std::vector<int>> getConnectedComponents(const std::vector<std::vect
 class GraphBuilder {
 public:
 	GraphBuilder(
-		int n_features = 110, int n_edge_features = 0, int n_target_edge_features = 0, bool directed = false,
-		bool self_loops = false
+		int num_node_features, int num_targets = 1, int num_edge_attributes = 0, int num_dimensions = 2,
+		bool directed = false, bool self_loops = false, bool fill_edges = false
 	);
 	~GraphBuilder();
 
-	void addNodes(std::vector<int> ids, std::vector<std::vector<double>> features);
+	void addNodes(const std::vector<int> &ids, const std::vector<std::vector<double>> &features);
 	void addNode(int id, const std::vector<double> &features);
 	void addNode(int id, std::initializer_list<double> features);
-	void addNodeTargets(std::vector<int> ids, std::vector<std::vector<double>> targets);
+
+	void addNodeTargets(const std::vector<int> &ids, const std::vector<std::vector<double>> &targets);
 	void addNodeTarget(int id, const std::vector<double> &target);
 
+	void addNodePositions(const std::vector<int> &ids, const std::vector<std::vector<double>> &positions);
+	void addNodePosition(int id, const std::vector<double> &position);
+
 	void addEdge(int src_id, int dst_id);
-	void addEdge(int src_id, int dst_id, const std::vector<double> &features);
-	void addEdgeTarget(int src_id, int dst_id);
-	void addEdgeTarget(int src_id, int dst_id, const std::vector<double> &target);
+	void addEdge(int src_id, int dst_id, const std::vector<double> &attributes);
+	void addEdges(const std::vector<int> &node_ids, const std::string &algorithm = "fully_connected");
 
 	GraphUtils::GraphData buildGraph();
 	void reset();
+	bool validate() const;
+
+	void PrintGraph() const;
 
 	inline bool isDirected() const noexcept;
 	inline bool hasSelfLoops() const noexcept;
 	inline bool isBuilt() const noexcept;
 
-	void summary() const {
-		std::cout << "Graph Summary:\n"
-				  << "  Nodes: " << mNodeFeatures.size() << "\n"
-				  << "  Edges: " << mEdges.size() << "\n"
-				  << "  Edges Target: " << mEdgeTargets.size() << "\n"
-				  << "  Directed: " << std::boolalpha << mDirected << "\n"
-				  << "  Self-loops: " << mIncludeSelfLoops << "\n";
-	}
-
 	int getNumNodeFeatures() const { return mNumNodeFeatures; }
-	int getNumEdgeFeatures() const { return mNumEdgeFeatures; }
+	int getNumEdgeAttributes() const { return mNumEdgeAttributes; }
+	int getNumTargets() const { return mNumTargets; }
+	int getNumDimensions() const { return mNumDimensions; }
+
 	int getNumNodes() const { return mNodeFeatures.size(); }
 	int getNumEdges() const;
-	int getNumEdgeTargets() const;
 
 private:
 	int mNumNodeFeatures;
-	int mNumEdgeFeatures;
-	int mNumTargetEdgeFeatures;
+	int mNumTargets;
+	int mNumEdgeAttributes;
+	int mNumDimensions;
+
 	bool mBuilt;
 	bool mDirected;
 	bool mIncludeSelfLoops;
+	bool mFillEdges;
 
-	std::map<int, std::vector<double>> mNodeFeatures; // node_id -> features
-	std::map<int, std::vector<double>> mNodeTargets;  // node_id -> target values
+	std::map<int, std::vector<double>> mNodeFeatures;  // node_id -> features
+	std::map<int, std::vector<double>> mNodeTargets;   // node_id -> target
+	std::map<int, std::vector<double>> mNodePositions; // node_id -> position
 
-	std::map<int, std::unordered_set<int>> mEdges;							// src_id -> set of dst_ids
-	std::map<int, std::unordered_set<int>> mEdgeTargets;					// src_id -> set of dst_ids
-	std::map<std::pair<int, int>, std::vector<double>> mEdgeFeatures;		// (src_id, dst_id) -> features
-	std::map<std::pair<int, int>, std::vector<double>> mEdgeTargetFeatures; // (src_id, dst_id) -> target features
+	std::map<int, std::unordered_set<int>> mEdges;						// src_id -> set of dst_ids
+	std::map<std::pair<int, int>, std::vector<double>> mEdgeAttributes; // (src_id, dst_id) -> edge attributes
 };
 
 inline bool GraphBuilder::isDirected() const noexcept { return mDirected; }
