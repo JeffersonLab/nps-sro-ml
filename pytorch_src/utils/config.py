@@ -158,10 +158,7 @@ class ConfigParser:
 
         args = args.parse_args()
 
-        device = getattr(args, 'device', None)
         resume = getattr(args, 'resume', None)
-        if device is not None:
-            os.environ["CUDA_VISIBLE_DEVICES"] = device
 
         if resume is not None:
             resume = pathlib.Path(resume)
@@ -180,7 +177,13 @@ class ConfigParser:
         modification = {
             opt.target: getattr(args, _get_opt_name(opt.flags)) for opt in options
         }
-        return cls(config, resume, modification)
+        cfg = cls(config, resume, modification)
+
+        for k, v in vars(args).items():
+            if k not in cfg.config:
+                cfg.config[k] = v
+
+        return cfg
 
     def get_logger(self, name: str, verbosity=2, **kwargs) -> logging.Logger:
         """
