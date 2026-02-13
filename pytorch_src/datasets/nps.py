@@ -5,6 +5,7 @@ from typing import Optional
 from torch_geometric.data import Dataset, Data
 from base.dataloader import BaseDataLoader
 from utils.utils import get_logger
+from utils.graph import reindex_edge_index
 
 
 NTIME = 110
@@ -157,6 +158,14 @@ class NPSDataset(Dataset):
                 f"Expected edgeIndex to have shape (2, E), but got {edge_index.shape}"
             )
 
+        valid_mask = torch.isin(edge_index, node_ids)
+        if not valid_mask.all():
+            invalid_ids = edge_index[~valid_mask].unique()
+            raise ValueError(
+                f"Edge index contains invalid node IDs: {invalid_ids.tolist()}"
+            )
+
+        edge_index = reindex_edge_index(edge_index, node_ids)
         row, col = get_position_from_node_index(node_ids.to(torch.long))
         pos = torch.stack((row, col), dim=1).float()  # shape (N, 2)
 
