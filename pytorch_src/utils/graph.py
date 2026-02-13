@@ -35,6 +35,38 @@ def edge_to_adj_matrix(edge_index: torch.LongTensor, num_nodes: int):
     return adj
 
 
+def reindex_edge_index(
+    edge_index: torch.LongTensor, node_ids: torch.LongTensor
+) -> torch.LongTensor:
+    """
+    Reindex edge_index from node IDs to node indices. It is to ensure the edge_index is compatible with the node features tensor. For example, if node_ids = [10, 20, 30], and edge_index contains edges (10→20) and (20→30), then the reindexed edge_index will contain edges (0→1) and (1→2).
+
+    Parameters
+    ----------
+    edge_index: torch.LongTensor
+        edge index with node IDs, shape [2, E]
+    node_ids: torch.LongTensor
+        node IDs corresponding to node indices, shape [N]
+
+    Returns
+    -------
+    edge_index_reindexed: torch.LongTensor
+        edge index with node indices, shape [2, E]
+
+    Examples
+    --------
+    >>> node_ids = torch.tensor([10, 20, 30])
+    >>> edge_index = torch.tensor([[10, 20], [20, 30]])
+    >>> edge_index_reindexed = reindex_edge_index(edge_index, node_ids)
+    >>> print(edge_index_reindexed)
+    >>> torch.tensor([[0, 1], [1, 2]])
+    """
+    max_id = node_ids.max()
+    mapping = torch.zeros(max_id + 1, dtype=torch.long, device=edge_index.device)
+    mapping[node_ids] = torch.arange(len(node_ids), device=edge_index.device)
+    return mapping[edge_index]
+
+
 def pack_to_graph_batches(x: torch.Tensor, *args, batch: torch.LongTensor) -> Tuple:
     """
     Pack node features into graph-batched format, padding with zeros for graphs with fewer nodes. Empty graphs should never occur.
