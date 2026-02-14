@@ -105,7 +105,9 @@ int main(int argc, char **argv) {
 
 				for (const auto &signal : cluster.signals) {
 					int blockId_ = signal.blockID;
-					auto [col, row] = geometry.getColRowFromBlock(blockId_);
+                    // blockId_ in the geant4 fills y first, so we need to convert it back to col,row and then to blockId for the graph
+                    int col = blockId_ / NPS::NROWS; 
+					int row = blockId_ % NPS::NROWS;
 					int blockId = geometry.getBlockFromColRow(col, row);
 
 					clustToNodeIds[i + 1].push_back(nodeId);
