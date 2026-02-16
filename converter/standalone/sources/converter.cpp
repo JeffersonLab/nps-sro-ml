@@ -63,8 +63,9 @@ int main(int argc, char **argv) {
 	int processedEntries = 0;
 	int savedEvents = 0;
 	int useEntries = readEntries < 0 ? chain->GetEntries() : std::min(readEntries, (int)chain->GetEntries());
+	auto isDirected = edgeAlgorithm == "center_to_neighbor";
 
-	GraphUtils::GraphBuilder graphBuilder(NPS::NTIME, 1, 0, 2, false, true, createEdges);
+	GraphUtils::GraphBuilder graphBuilder(NPS::NTIME, 1, 0, 2, isDirected, true, createEdges);
 
 	auto finishEvent = [&]() {
 		graphBuilder.reset();
@@ -72,8 +73,7 @@ int main(int argc, char **argv) {
 	};
 
 	while (processedEntries < useEntries) {
-		// std::cout << "\rProcessing entry " << processedEntries + 1 << "/" << useEntries << std::flush;
-		std::cout << "\rProcessing entry " << processedEntries + 1 << "/" << useEntries << std::endl;
+		std::cout << "\rProcessing entry " << processedEntries + 1 << "/" << useEntries << std::flush;
 
 		int currEvent = startEntry + processedEntries;
 		chain->GetEntry(currEvent);
@@ -124,8 +124,16 @@ int main(int argc, char **argv) {
 		}
 
 		if (createEdges) {
+
 			for (const auto &[cid, nodes] : clusterIds) {
-				graphBuilder.addEdges(nodes, edgeAlgorithm);
+
+                if (nodes.size() == 1) {
+                    graphBuilder.addEdge(nodes[0], nodes[0]);
+                }
+                else {
+				    graphBuilder.addEdges(nodes, edgeAlgorithm);
+                }
+                
 			}
 		}
 
@@ -148,6 +156,12 @@ int main(int argc, char **argv) {
 
 		// Build graph and save tensors
 		auto graphData = graphBuilder.buildGraph();
+
+        if (graphBuilder.isEmpty()) {
+    		finishEvent();
+            continue;
+        }
+
 		if (debug && createEdges) {
 			// this is only valid if there is no overlapping clusters.
 			auto components = GraphUtils::getConnectedComponents(graphData.edgeIndex);
@@ -230,6 +244,7 @@ void addArguments(int argc, char **argv) {
 
 	ARGS.add_argument("--edge-algorithm")
 		.help("algorithm to create edges (fully_connected, center_to_neighbor, etc.)")
+        .choices("fully_connected", "center_to_neighbor")
 		.default_value(std::string("fully_connected"))
 		.required();
 
