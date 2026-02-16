@@ -135,6 +135,10 @@ int main(int argc, char **argv) {
 
 			if (createEdges) {
 				for (const auto &[cid, nodes] : clustToNodeIds) {
+					if (nodes.size() == 1) {
+						graphBuilder.addEdge(nodes[0], nodes[0]);
+						continue;
+					}
 
 					std::vector<int> sortedNodes = nodes;
 					int centerNode = -1;

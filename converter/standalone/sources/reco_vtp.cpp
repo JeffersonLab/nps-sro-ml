@@ -212,16 +212,20 @@ int main(int argc, char **argv) {
 
 		if (createEdges) {
 			for (const auto &[_, nodes] : clustToNodeIds) {
-				graphBuilder.addEdges(nodes, edgeAlgorithm);
+				if (nodes.size() == 1) {
+					graphBuilder.addEdge(nodes[0], nodes[0]);
+				} else {
+					graphBuilder.addEdges(nodes, edgeAlgorithm);
+				}
 			}
 		}
 
 		// Build graph and save tensors
 		auto graphData = graphBuilder.buildGraph();
-        if (graphBuilder.isEmpty()) {
-            finishEvent();
-            continue;
-        }        
+		if (graphBuilder.isEmpty()) {
+			finishEvent();
+			continue;
+		}
 		saveGraph(graphData, Form("%s/%08d.pt", outputDir.c_str(), savedEvents));
 		finishEvent();
 		savedEvents++;
@@ -322,7 +326,7 @@ void Addarguments(int argc, char **argv) {
 		.choices("fully_connected", "center_to_neighbor")
 		.default_value(std::string("center_to_neighbor"))
 		.required();
-        
+
 	ARGS.add_argument("--energy-diff")
 		.help("time window for VTP clustering")
 		.default_value(5.0)
