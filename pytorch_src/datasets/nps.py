@@ -172,13 +172,7 @@ class NPSDataset(Dataset):
             )
 
         if self.use_edges:
-            valid_mask = torch.isin(edge_index, node_features[:, 0].long())
-            if not valid_mask.all():
-                invalid_ids = edge_index[~valid_mask].unique()
-                raise ValueError(
-                    f"Edge index contains invalid node IDs: {invalid_ids.tolist()}"
-                )
-            edge_index = reindex_edge_index(edge_index, node_features[:, 0].long())
+            edge_index = reindex_edge_index(edge_index, torch.arange(N))
         else:
             edge_index = None
             edge_attr = None
