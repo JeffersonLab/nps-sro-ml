@@ -36,6 +36,7 @@ class NPSDataset(Dataset):
         data_dir: Optional[pathlib.Path | str] = None,
         logger: Optional[logging.Logger] = None,
         max_files: Optional[int] = None,
+        use_edges: bool = False,
     ):
         """
         Initialize NPSDataset, forces `transform`, `pre_transform`, and `pre_filter` to be None. If you want to apply any transformations or filtering, do it before initializing the dataset. Implementing those functionalities in this class lead to confusion. For instance, the `processed_file_names` is expected to be known beforehand, which is not possible if `pre_filter` skips some samples.
@@ -63,7 +64,6 @@ class NPSDataset(Dataset):
             self.logger.info(f"Loading data files from directory: {data_dir}")
 
         else:
-
             input_paths = [pathlib.Path(p) for p in paths][:max_files]
             for pth in input_paths:
                 if self._validate_file(pth):
@@ -75,6 +75,7 @@ class NPSDataset(Dataset):
             raise RuntimeError("No valid .pt files found.")
 
         root = self.paths[0].parent / ".pyg"
+        self.use_edges = use_edges
         super().__init__(root=root, transform=None, pre_transform=None, pre_filter=None)
 
     def _validate_file(self, path: pathlib.Path) -> bool:
@@ -113,23 +114,23 @@ class NPSDataset(Dataset):
         Unpack raw data into components.
 
         The expected structure of the input data tuple is as follows:
-        0: node_ids
-        1: node_features
-        2: node_targets
-        3: edge_features
-        4: edge_target_features
-        5: edge_index
-        6: edge_target_index
+        0: node_features
+        1: edge_index
+        2: edge_features
+        3: node_targets
+        4: node_positions
 
         Parameters
         ----------
         data : tuple[torch.Tensor, ...]
             Raw data tuple loaded from .pt file
         """
-        node_ids = data[0]  # [num_nodes]
-        node_features = data[1]  # [num_nodes][num_node_features]
-        edge_index = data[6]  # [2][num_edges]
-        return node_ids, node_features, edge_index
+        node_features = data[0]  # [num_nodes][num_node_features]
+        edge_index = data[1]  # [2][num_edges]
+        edge_attr = data[2]  # [num_edges][num_edge_attributes]
+        node_targets = data[3]  # [num_nodes][num_node_targets]
+        node_positions = data[4]  # [num_nodes][2]
+        return node_features, edge_index, edge_attr, node_targets, node_positions
 
     def _build_graph(self, data: tuple[torch.Tensor, ...]) -> Data:
         """
@@ -145,12 +146,19 @@ class NPSDataset(Dataset):
         Data
             PyG Data object containing graph information.
         """
-        node_ids, node_features, edge_index = self._unpack_data(data)
+        node_features, edge_index, edge_attr, node_targets, node_positions = (
+            self._unpack_data(data)
+        )
 
         N, F = node_features.shape
-        if N != node_ids.shape[0]:
+
+        if N != node_targets.shape[0]:
             raise ValueError(
-                f"Expected nodeFeatures to have shape ({node_ids.shape[0]}, {F}), but got ({N}, {F})"
+                f"Expected nodeFeatures to have shape ({node_targets.shape[0]}, {F}), but got ({N}, {F})"
+            )
+        if N != node_positions.shape[0]:
+            raise ValueError(
+                f"Expected nodeFeatures to have shape ({node_positions.shape[0]}, {F}), but got ({N}, {F})"
             )
 
         if edge_index.shape[0] != 2:
@@ -158,24 +166,29 @@ class NPSDataset(Dataset):
                 f"Expected edgeIndex to have shape (2, E), but got {edge_index.shape}"
             )
 
-        valid_mask = torch.isin(edge_index, node_ids)
-        if not valid_mask.all():
-            invalid_ids = edge_index[~valid_mask].unique()
+        if edge_attr.shape[0] != edge_index.shape[1]:
             raise ValueError(
-                f"Edge index contains invalid node IDs: {invalid_ids.tolist()}"
+                f"Expected edgeAttr to have shape (E, num_edge_attributes), but got {edge_attr.shape}"
             )
 
-        edge_index = reindex_edge_index(edge_index, node_ids)
-        row, col = get_position_from_node_index(node_ids.to(torch.long))
-        pos = torch.stack((row, col), dim=1).float()  # shape (N, 2)
+        if self.use_edges:
+            valid_mask = torch.isin(edge_index, node_features[:, 0].long())
+            if not valid_mask.all():
+                invalid_ids = edge_index[~valid_mask].unique()
+                raise ValueError(
+                    f"Edge index contains invalid node IDs: {invalid_ids.tolist()}"
+                )
+            edge_index = reindex_edge_index(edge_index, node_features[:, 0].long())
+        else:
+            edge_index = None
+            edge_attr = None
 
         return Data(
-            x=node_features.float(),  # node features (waveforms)
-            edge_index=edge_index,  # edges will be defined dynamically later
-            edge_attr=None,  # edge attributes not used
-            y=None,  # node targets not used
-            pos=pos,  # node positions according to the presence of waveforms
-            time=None,  # time information is contained in nodeFeatures
+            x=node_features.float(),
+            edge_index=edge_index,
+            edge_attr=edge_attr,
+            y=node_targets.float(),
+            pos=node_positions.float(),
         )
 
     def len(self) -> int:
