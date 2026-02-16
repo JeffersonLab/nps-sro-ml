@@ -210,6 +210,20 @@ int main(int argc, char **argv) {
 			}
 		}
 
+		// add background nodes
+		for (int block = 0; block < NPS::NBLOCKS; block++) {
+			if (nodeToBlockId.count(block) == 0) {
+				int signalIndex = blockToSignalIndex.count(block) > 0 ? blockToSignalIndex[block] : -1;
+				std::vector<double> signal =
+					signalIndex != -1 ? signals[signalIndex] : std::vector<double>(NPS::NTIME, 0.0);
+				graphBuilder.addNode(nodeId, signal);
+				graphBuilder.addNodeTarget(nodeId, {-1.0}); // background nodes have target -1
+				auto [col, row] = geometry.getColRowFromBlock(block);
+				graphBuilder.addNodePosition(nodeId, {static_cast<double>(col), static_cast<double>(row)});
+				nodeId++;
+			}
+		}
+
 		if (createEdges) {
 			for (const auto &[_, nodes] : clustToNodeIds) {
 				if (nodes.size() == 1) {
