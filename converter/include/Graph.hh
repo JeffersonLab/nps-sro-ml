@@ -68,6 +68,7 @@ public:
 
 	int getNumNodes() const { return mNodeFeatures.size(); }
 	int getNumEdges() const;
+	bool isEmpty() const;
 
 private:
 	int mNumNodeFeatures;
@@ -75,7 +76,6 @@ private:
 	int mNumEdgeAttributes;
 	int mNumDimensions;
 
-	bool mBuilt;
 	bool mDirected;
 	bool mIncludeSelfLoops;
 	bool mFillEdges;
@@ -90,7 +90,6 @@ private:
 
 inline bool GraphBuilder::isDirected() const noexcept { return mDirected; }
 inline bool GraphBuilder::hasSelfLoops() const noexcept { return mIncludeSelfLoops; }
-inline bool GraphBuilder::isBuilt() const noexcept { return mBuilt; }
 }; // namespace GraphUtils
 
 #endif // GRAPH_HH

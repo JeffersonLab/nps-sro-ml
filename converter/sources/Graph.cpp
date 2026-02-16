@@ -76,7 +76,6 @@ GraphBuilder::GraphBuilder(
 	mNumTargets(num_targets),
 	mNumEdgeAttributes(num_edge_attributes),
 	mNumDimensions(num_dimensions),
-	mBuilt(false),
 	mDirected(directed),
 	mIncludeSelfLoops(self_loops),
 	mFillEdges(fill_edges) {}
@@ -192,7 +191,6 @@ void GraphBuilder::reset() {
 	mNodePositions.clear();
 	mEdges.clear();
 	mEdgeAttributes.clear();
-	mBuilt = false;
 }
 
 bool GraphBuilder::validate() const {
@@ -233,6 +231,11 @@ bool GraphBuilder::validate() const {
 		}
 	}
 	return true;
+}
+
+bool GraphBuilder::isEmpty() const {
+	return mNodeFeatures.empty() && mEdges.empty() && mNodeTargets.empty() && mNodePositions.empty() &&
+		   mEdgeAttributes.empty();
 }
 
 GraphUtils::GraphData GraphBuilder::buildGraph() {
@@ -296,7 +299,6 @@ GraphUtils::GraphData GraphBuilder::buildGraph() {
 		}
 	}
 
-	mBuilt = true;
 	return std::move(graph);
 }
 
