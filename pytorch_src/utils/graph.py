@@ -276,3 +276,58 @@ def find_local_edge_index(
 
     # map global → local
     return node_map[edge_index_b]
+
+
+def create_unique_object_ids(
+    object_ids: torch.Tensor,
+    batch: torch.Tensor,
+    noise_idx: int = -1,
+) -> torch.Tensor:
+    """
+    Create unique object IDs across batches, preserving noise labels.
+
+    Parameters
+    ----------
+    object_ids: torch.Tensor
+        shape [N], object ID for each node, where N is total number of nodes across all graphs. Noise nodes have IDs in noise_idx.
+    batch: torch.Tensor
+        shape [N], batch vector, batch[i] = graph index of node i
+    noise_idx: int, optional
+        noise node ID, default -1
+
+    Returns
+    -------
+    new_object_ids: torch.Tensor
+        shape [N], new object IDs for each node, where IDs are unique across batches for signal nodes, and noise nodes retain their original IDs.
+
+    Examples
+    --------
+    >>> batch = torch.tensor([0, 0, 0, 1, 1, 2])
+    >>> object_ids = torch.tensor([0, 1, -1, 0, 1, -1])
+    >>> noise_idx = -1
+    >>> new_object_ids = create_unique_object_ids(object_ids, batch, noise_idx)
+    >>> print(new_object_ids)
+    >>> torch.tensor([0, 1, -1, 2, 3, -1])
+    """
+    is_signal = object_ids != noise_idx
+
+    if is_signal.sum() == 0:
+        return object_ids.clone()
+
+    result = object_ids.clone()
+
+    # Get unique (batch, object_id) pairs for signal nodes
+    signal_mask = is_signal
+    signal_batch = batch[signal_mask]
+    signal_oid = object_ids[signal_mask]
+
+    # Create compound keys and get unique pairs
+    max_oid = signal_oid.max().item() + 1
+    compound_key = signal_batch * max_oid + signal_oid
+    _, inverse = torch.unique(compound_key, sorted=True, return_inverse=True)
+
+    # Assign new sequential IDs (starting after max noise index)
+    new_ids = inverse + noise_idx + 1
+    result[signal_mask] = new_ids
+
+    return result
