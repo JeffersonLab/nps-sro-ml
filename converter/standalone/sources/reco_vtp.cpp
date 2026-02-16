@@ -212,7 +212,19 @@ int main(int argc, char **argv) {
 
 		// add background nodes
 		for (int block = 0; block < NPS::NBLOCKS; block++) {
-			if (nodeToBlockId.count(block) == 0) {
+			bool inCluster = false;
+			for (const auto &[_, nodes] : clustToNodeIds) {
+				for (int node_id : nodes) {
+					if (nodeToBlockId[node_id] == block) {
+						inCluster = true;
+						break;
+					}
+				}
+				if (inCluster) {
+					break;
+				}
+			}
+			if (!inCluster) {
 				int signalIndex = blockToSignalIndex.count(block) > 0 ? blockToSignalIndex[block] : -1;
 				std::vector<double> signal =
 					signalIndex != -1 ? signals[signalIndex] : std::vector<double>(NPS::NTIME, 0.0);
