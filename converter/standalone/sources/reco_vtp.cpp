@@ -67,7 +67,9 @@ int main(int argc, char **argv) {
 	fADC250 fadcDevice(NPS::NBLOCKS, vmeConfig);
 	VTP vtpDevice(NPS::NBLOCKS, NPS::NTIME, NPS::DELTA_T, vtpConfig);
 	NPS::Geometry geometry(geoConfig);
-	GraphUtils::GraphBuilder graphBuilder(NPS::NTIME, 1, 0, 2, false, true, createEdges);
+	auto isDirected = edgeAlgorithm == "center_to_neighbor";
+
+	GraphUtils::GraphBuilder graphBuilder(NPS::NTIME, 1, 0, 2, isDirected, true, createEdges);
 
 	auto finishEvent = [&]() {
 		fadcDevice.resetEvent();
@@ -216,6 +218,10 @@ int main(int argc, char **argv) {
 
 		// Build graph and save tensors
 		auto graphData = graphBuilder.buildGraph();
+        if (graphBuilder.isEmpty()) {
+            finishEvent();
+            continue;
+        }        
 		saveGraph(graphData, Form("%s/%08d.pt", outputDir.c_str(), savedEvents));
 		finishEvent();
 		savedEvents++;
@@ -313,9 +319,10 @@ void Addarguments(int argc, char **argv) {
 
 	ARGS.add_argument("--edge-algorithm")
 		.help("algorithm to create edges (fully_connected, center_to_neighbor, etc.)")
-		.default_value(std::string("fully_connected"))
+		.choices("fully_connected", "center_to_neighbor")
+		.default_value(std::string("center_to_neighbor"))
 		.required();
-
+        
 	ARGS.add_argument("--energy-diff")
 		.help("time window for VTP clustering")
 		.default_value(5.0)
