@@ -62,7 +62,8 @@ int main(int argc, char **argv) {
 	const int nfeat_perPulse = 2; // energy and time
 	const int nclus_perEvent = 2; // only 2 photons in each geant4 event, so at most 2 clusters
 	int maxPulses = overlaps * nfeat_perPulse * nclus_perEvent;
-	GraphUtils::GraphBuilder graphBuilder(maxPulses, 1, 0, 2, false, true, createEdges);
+	auto isDirected = edgeAlgorithm == "center_to_neighbor";
+	GraphUtils::GraphBuilder graphBuilder(maxPulses, 1, 0, 2, isDirected, true, createEdges);
 
 	// buffer for overlapping events
 	std::vector<NPS::Cluster> clusters;
@@ -105,8 +106,9 @@ int main(int argc, char **argv) {
 
 				for (const auto &signal : cluster.signals) {
 					int blockId_ = signal.blockID;
-                    // blockId_ in the geant4 fills y first, so we need to convert it back to col,row and then to blockId for the graph
-                    int col = blockId_ / NPS::NROWS; 
+					// blockId_ in the geant4 fills y first, so we need to convert it back to col,row and then to
+					// blockId for the graph
+					int col = blockId_ / NPS::NROWS;
 					int row = blockId_ % NPS::NROWS;
 					int blockId = geometry.getBlockFromColRow(col, row);
 
@@ -133,8 +135,36 @@ int main(int argc, char **argv) {
 
 			if (createEdges) {
 				for (const auto &[cid, nodes] : clustToNodeIds) {
-					graphBuilder.addEdges(nodes, edgeAlgorithm);
+
+					std::vector<int> sortedNodes = nodes;
+					int centerNode = -1;
+					double earliestTime = std::numeric_limits<double>::max();
+					for (int nodeId : sortedNodes) {
+						int blockId = nodeToBlockId[nodeId];
+						for (size_t i = 1; i < blockPulseMap[blockId].size(); i += 2) { // time is at odd indices
+							if (blockPulseMap[blockId][i] < earliestTime) {
+								earliestTime = blockPulseMap[blockId][i];
+								centerNode = nodeId;
+							}
+						}
+					}
+
+					// move the center node to the front of the list
+					auto it = std::find(sortedNodes.begin(), sortedNodes.end(), centerNode);
+					if (it != sortedNodes.end()) {
+						std::iter_swap(sortedNodes.begin(), it);
+					}
+					graphBuilder.addEdges(sortedNodes, edgeAlgorithm);
 				}
+			}
+
+			// check if we have at least one node before saving the graph
+			if (graphBuilder.isEmpty()) {
+				std::cout << "Warning: No nodes in the graph for events " << (currEvent - overlaps + 1) << " to "
+						  << currEvent << ". Skipping graph saving." << std::endl;
+				clusters.clear();
+				graphBuilder.reset();
+				continue;
 			}
 
 			auto graphData = graphBuilder.buildGraph();
@@ -193,7 +223,8 @@ void addArguments(int argc, char **argv) {
 
 	ARGS.add_argument("--edge-algorithm")
 		.help("algorithm to create edges (fully_connected, center_to_neighbor, etc.)")
-		.default_value(std::string("fully_connected"))
+		.choices("fully_connected", "center_to_neighbor")
+		.default_value(std::string("center_to_neighbor"))
 		.required();
 
 	ARGS.add_argument("--start-event").help("starting event number").default_value(0).scan<'i', int>();
