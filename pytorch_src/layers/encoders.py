@@ -1,3 +1,5 @@
+from typing import Tuple
+
 import torch
 import torch.nn as nn
 from layers.attention import AttentionLayer
@@ -14,7 +16,6 @@ class BaseEncoderLayer(nn.Module):
         d_model: int = 512,
         dropout: float = 0.1,
         batchnorm: bool = False,
-        return_attn: bool = True,
         ff_kwargs: dict = {},
     ):
         """
@@ -30,8 +31,6 @@ class BaseEncoderLayer(nn.Module):
             Dropout rate, by default 0.1.
         batchnorm : bool, optional
             Whether to use batch normalization, by default False.
-        return_attn : bool, optional
-            Whether to return attention weights, by default True.
         ff_kwargs : dict, optional
             Additional keyword arguments for the feedforward network, by default {}.
         """
@@ -47,8 +46,6 @@ class BaseEncoderLayer(nn.Module):
         else:
             self.norm1 = nn.LayerNorm(d_model)
             self.norm2 = nn.LayerNorm(d_model)
-
-        self.return_attn = return_attn
 
     def _build_feedforward(self, d_model: int, **ff_kwargs) -> nn.Module:
         """
@@ -71,10 +68,9 @@ class BaseEncoderLayer(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        *,
         pos_bias: torch.Tensor = None,
         attn_mask: torch.Tensor = None,
-    ) -> tuple[torch.Tensor, torch.Tensor] | torch.Tensor:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Forward pass through the encoder layer.
 
@@ -89,8 +85,8 @@ class BaseEncoderLayer(nn.Module):
 
         Returns
         -------
-        tuple[torch.Tensor, torch.Tensor] | torch.Tensor
-            If `return_attn` is True, returns a tuple containing the output tensor and the attention weights tensor. Otherwise, returns only the output tensor.
+        Tuple[torch.Tensor, torch.Tensor]
+            A tuple containing the output tensor and the attention weights from the attention layer. The output tensor is typically of shape (batch_size, sequence_length, d_model), and the attention weights depend on the specific attention implementation.
         """
         x_new, attn = self.attn_layer(x, x, x, pos_bias=pos_bias, attn_mask=attn_mask)
 
@@ -106,10 +102,7 @@ class BaseEncoderLayer(nn.Module):
         else:
             x = self.norm2(x)
 
-        if self.return_attn:
-            return x, attn
-        else:
-            return x
+        return x, attn
 
 
 class VanillaEncoderLayer(BaseEncoderLayer):
@@ -147,14 +140,13 @@ class Encoder(nn.Module):
     A container module that stacks multiple encoder layers.
     """
 
-    def __init__(self, enc_layers: list[BaseEncoderLayer], return_attn: bool = True):
+    def __init__(self, enc_layers: list[BaseEncoderLayer]):
         super(Encoder, self).__init__()
         self.encoders = nn.ModuleList(enc_layers)
-        self.return_attn = return_attn
 
     def forward(
         self, x, pos_bias=None, attn_mask=None
-    ) -> tuple[torch.Tensor, list[torch.Tensor]] | torch.Tensor:
+    ) -> Tuple[torch.Tensor, list[torch.Tensor]]:
         """
         Forward pass through the encoder stack.
 
@@ -169,15 +161,12 @@ class Encoder(nn.Module):
 
         Returns
         -------
-        tuple[torch.Tensor, list[torch.Tensor]] | torch.Tensor
-            If `return_attn` is True, returns a tuple containing the output tensor and a list of attention tensors from each encoder layer. Otherwise, returns only the output tensor.
+        Tuple[torch.Tensor, list[torch.Tensor]]
+            A tuple containing the output tensor and a list of attention weights from each encoder layer. The output tensor is typically of shape (batch_size, sequence_length, d_model), and the attention weights depend on the specific attention implementation.
         """
         attns = []
         for enc in self.encoders:
             x, attn = enc(x, pos_bias=pos_bias, attn_mask=attn_mask)
             attns.append(attn)
 
-        if self.return_attn:
-            return x, attns
-
-        return x
+        return x, attns
