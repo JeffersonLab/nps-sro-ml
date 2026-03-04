@@ -254,8 +254,3 @@ class NPSDataLoader(BaseDataLoader):
             raise AttributeError(
                 f"'{type(self).__name__}' object and its dataset have no attribute '{name}'"
             )
-
-    @property
-    def num_features_(self):
-        """Return the dimension of node features."""
-        return self.dataset[0].num_features
