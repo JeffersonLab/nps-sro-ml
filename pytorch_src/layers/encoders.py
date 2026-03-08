@@ -1,8 +1,7 @@
-from typing import Tuple
-
 import torch
 import torch.nn as nn
 from layers.attention import AttentionLayer
+from typing import Optional, Tuple, List
 
 
 class BaseEncoderLayer(nn.Module):
@@ -68,8 +67,8 @@ class BaseEncoderLayer(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        pos_bias: torch.Tensor = None,
-        attn_mask: torch.Tensor = None,
+        attn_mask: torch.Tensor,
+        pos_bias: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Forward pass through the encoder layer.
@@ -78,17 +77,17 @@ class BaseEncoderLayer(nn.Module):
         ----------
         x : torch.Tensor
             Input tensor to the encoder layer, typically of shape (batch_size, sequence_length, d_model).
-        pos_bias : torch.Tensor, optional
-            Positional bias tensor for attention, by default None. If provided, it is expected to be of shape compatible with the attention mechanism, e.g. (batch_size, sequence_length, sequence_length)
-        attn_mask : torch.Tensor, optional
-            Attention mask tensor, by default None
+        attn_mask : torch.Tensor
+            Attention mask tensor.
+        pos_bias : torch.Tensor
+            Positional bias tensor for attention.
 
         Returns
         -------
         Tuple[torch.Tensor, torch.Tensor]
             A tuple containing the output tensor and the attention weights from the attention layer. The output tensor is typically of shape (batch_size, sequence_length, d_model), and the attention weights depend on the specific attention implementation.
         """
-        x_new, attn = self.attn_layer(x, x, x, pos_bias=pos_bias, attn_mask=attn_mask)
+        x_new, attn = self.attn_layer(x, x, x, attn_mask, pos_bias)
 
         if self.batchnorm:
             x = (x + self.dropout(x_new)).transpose(1, 2)
@@ -140,13 +139,16 @@ class Encoder(nn.Module):
     A container module that stacks multiple encoder layers.
     """
 
-    def __init__(self, enc_layers: list[BaseEncoderLayer]):
+    def __init__(self, enc_layers: List[BaseEncoderLayer]):
         super(Encoder, self).__init__()
         self.encoders = nn.ModuleList(enc_layers)
 
     def forward(
-        self, x, pos_bias=None, attn_mask=None
-    ) -> Tuple[torch.Tensor, list[torch.Tensor]]:
+        self,
+        x,
+        attn_mask: torch.Tensor,
+        pos_bias: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, List[torch.Tensor]]:
         """
         Forward pass through the encoder stack.
 
@@ -154,19 +156,25 @@ class Encoder(nn.Module):
         ----------
         x : torch.Tensor
             Input tensor to the encoder, typically of shape (batch_size, sequence_length, d_model).
+
+        attn_mask : torch.Tensor
+            Attention mask tensor.
+
         pos_bias : torch.Tensor, optional
             Positional bias tensor for attention, by default None. If provided, it is expected to be of shape compatible with the attention mechanism, e.g. (batch_size, sequence_length, sequence_length)
-        attn_mask : torch.Tensor, optional
-            Attention mask tensor, by default None
 
         Returns
         -------
-        Tuple[torch.Tensor, list[torch.Tensor]]
-            A tuple containing the output tensor and a list of attention weights from each encoder layer. The output tensor is typically of shape (batch_size, sequence_length, d_model), and the attention weights depend on the specific attention implementation.
+        Tuple[torch.Tensor, List[torch.Tensor]]
+            A tuple containing the output tensor and the attention weights produced by the attention layer. The output tensor is typically of shape (batch_size, sequence_length, d_model), and the attention weights depend on the specific attention implementation.
         """
         attns = []
         for enc in self.encoders:
-            x, attn = enc(x, pos_bias=pos_bias, attn_mask=attn_mask)
+            x, attn = enc(
+                x,
+                attn_mask,
+                pos_bias=pos_bias,
+            )
             attns.append(attn)
 
         return x, attns
