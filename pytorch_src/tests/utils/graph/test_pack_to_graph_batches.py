@@ -16,7 +16,8 @@ def test_pack_to_graph_batches_basic():
         ]
     )  # [6, 2]
 
-    x_graph, idx_out, mask_out = pack_to_graph_batches(x_in, batch)
+    x_graphs, idx_out, mask_out = pack_to_graph_batches(x_in, [], batch)
+    x_graph = x_graphs[0]  # [B, L_max, D]
 
     # Check shape
     assert x_graph.shape == (2, 3, 2), f"Expected shape (2, 3, 2), got {x_graph.shape}"
@@ -59,7 +60,8 @@ def test_pack_to_graph_batches_single_graph():
         ]
     )
 
-    x_graph, idx_out, mask_out = pack_to_graph_batches(x_in, batch)
+    x_graphs, idx_out, mask_out = pack_to_graph_batches(x_in, [], batch)
+    x_graph = x_graphs[0]  # [B, L_max, D]
 
     assert x_graph.shape == (1, 4, 2), f"Expected shape (1, 4, 2), got {x_graph.shape}"
     assert torch.allclose(x_graph[0], x_in), f"Single graph features mismatch"
@@ -85,7 +87,8 @@ def test_pack_to_graph_batches_unequal_sizes():
         ]
     )
 
-    x_graph, idx_out, mask_out = pack_to_graph_batches(x_in, batch)
+    x_graphs, idx_out, mask_out = pack_to_graph_batches(x_in, [], batch)
+    x_graph = x_graphs[0]  # [B, L_max, D]
 
     # Maximum size is 3 nodes
     assert x_graph.shape == (3, 3, 1), f"Expected shape (3, 3, 1), got {x_graph.shape}"
@@ -113,3 +116,58 @@ def test_pack_to_graph_batches_unequal_sizes():
         mask_out,
         torch.tensor([[True, True, False], [True, True, True], [True, False, False]]),
     ), f"Mask mismatch"
+
+
+def test_pack_to_graph_batches_multiple_features():
+    """Test packing with multiple feature dimensions."""
+    batch = torch.tensor([0, 0, 1, 1])  # graph 0: 2 nodes, graph 1: 2 nodes
+    x_in = torch.tensor(
+        [
+            [1.0, 10.0],
+            [2.0, 20.0],
+            [3.0, 30.0],
+            [4.0, 40.0],
+        ]
+    )
+    # additional feature dimension (e.g. positional features)
+    t0_in = torch.tensor([[0.1], [0.2], [0.3], [0.4]])
+    t1_in = torch.tensor([[0.5, 50], [0.6, 60], [0.7, 70], [0.8, 80]])
+
+    x_graphs, idx_out, mask_out = pack_to_graph_batches(x_in, [t0_in, t1_in], batch)
+    x_graph = x_graphs[0]  # [B, L_max, D]
+    t0_graph = x_graphs[1]  # [B, L_max, 1]
+    t1_graph = x_graphs[2]  # [B, L_max, 2]
+
+    assert x_graph.shape == (2, 2, 2), f"Expected shape (2, 2, 2), got {x_graph.shape}"
+    assert t0_graph.shape == (
+        2,
+        2,
+        1,
+    ), f"Expected shape (2, 2, 1), got {t0_graph.shape}"
+    assert t1_graph.shape == (
+        2,
+        2,
+        2,
+    ), f"Expected shape (2, 2, 2), got {t1_graph.shape}"
+
+    # Check graph 0
+    assert torch.allclose(
+        x_graph[0], torch.tensor([[1.0, 10.0], [2.0, 20.0]])
+    ), f"Graph 0 features mismatch"
+    assert torch.allclose(
+        t0_graph[0], torch.tensor([[0.1], [0.2]])
+    ), f"Graph 0 t0 mismatch"
+    assert torch.allclose(
+        t1_graph[0], torch.tensor([[0.5, 50], [0.6, 60]])
+    ), f"Graph 0 t1 mismatch"
+
+    # Check graph 1
+    assert torch.allclose(
+        x_graph[1], torch.tensor([[3.0, 30.0], [4.0, 40.0]])
+    ), f"Graph 1 features mismatch"
+    assert torch.allclose(
+        t0_graph[1], torch.tensor([[0.3], [0.4]])
+    ), f"Graph 1 t0 mismatch"
+    assert torch.allclose(
+        t1_graph[1], torch.tensor([[0.7, 70], [0.8, 80]])
+    ), f"Graph 1 t1 mismatch"
