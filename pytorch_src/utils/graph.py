@@ -1,8 +1,10 @@
 import torch
-from typing import Tuple
+from typing import List, Tuple
 
 
-def edge_to_adj_matrix(edge_index: torch.LongTensor, num_nodes: int):
+def edge_to_adj_matrix(
+    edge_index: torch.LongTensor, num_nodes: int
+) -> torch.BoolTensor:
     """
     Convert edge index to adjacency matrix.
 
@@ -67,7 +69,10 @@ def reindex_edge_index(
     return mapping[edge_index]
 
 
-def pack_to_graph_batches(x: torch.Tensor, *args, batch: torch.LongTensor) -> Tuple:
+@torch.jit.script
+def pack_to_graph_batches(
+    x: torch.Tensor, t: List[torch.Tensor], batch: torch.LongTensor
+) -> Tuple[List[torch.Tensor], List[torch.Tensor], torch.BoolTensor]:
     """
     Pack node features into graph-batched format, padding with zeros for graphs with fewer nodes. Empty graphs should never occur.
 
@@ -75,6 +80,8 @@ def pack_to_graph_batches(x: torch.Tensor, *args, batch: torch.LongTensor) -> Tu
     ----------
     x: torch.Tensor
         Node features, shape [N_total, D], where N_total is total number of nodes across all graphs, D is feature dimension.
+    t: List[torch.Tensor]
+        List of additional node-level tensors to pack, each of shape [N_total, D_t], where D_t is the feature dimension of that tensor.
     batch: torch.LongTensor
         Batch vector, shape [N_total], batch[i] = graph index of node i.
 
@@ -82,9 +89,9 @@ def pack_to_graph_batches(x: torch.Tensor, *args, batch: torch.LongTensor) -> Tu
     -------
     outputs: tuple
         A tuple containing:
-    x_graph: torch.Tensor
-        Node features in graph-batched format, shape [B, L_max, D], where B is batch size, L_max is max number of nodes per graph, D is feature dimension.
-    idx_out: list[torch.LongTensor]
+    x_graphs: List[torch.Tensor]
+        List of node feature tensors in graph-batched format. The first element is the packed x tensor of shape [B, L_max, D], where B is batch size, L_max is max number of nodes per graph, D is feature dimension. Subsequent elements are the packed tensors from t, each of shape [B, L_max, D_t].
+    idx_out: List[torch.Tensor]
         List of (global) index tensors for each graph in the batch.
     mask_out: torch.BoolTensor
         Mask tensor indicating valid nodes in the graph-batched format, shape [B, L_max].
@@ -93,7 +100,8 @@ def pack_to_graph_batches(x: torch.Tensor, *args, batch: torch.LongTensor) -> Tu
     --------
     >>> x = torch.tensor([[1.0], [2.0], [3.0], [4.0], [5.0], [6.0]])  # [6, 1]
     >>> batch = torch.tensor([0, 0, 1, 1, 0, 1])  # graph 0: nodes 0,1,4; graph 1: nodes 2,3,5
-    >>> x_graph, idx_out = pack_to_graph_batches(x, batch)
+    >>> x_graphs, idx_out, mask_out = pack_to_graph_batches(x, [], batch=batch)
+    >>> x_graph = x_graphs[0]
     >>> print(x_graph)
     >>> torch.tensor([[[1.0], [2.0], [5.0]],
                       [[3.0], [4.0], [6.0]]])
@@ -102,44 +110,52 @@ def pack_to_graph_batches(x: torch.Tensor, *args, batch: torch.LongTensor) -> Tu
     """
     device = x.device
     B = int(batch.max().item()) + 1  # number of graphs in the batch
-    assert set(batch.tolist()) == set(
-        range(B)
-    ), "Batch IDs must be contiguous starting at 0."
+
+    batch_unique = torch.unique(batch)
+    if (
+        batch_unique.numel() != B
+        or batch_unique.min() != 0
+        or batch_unique.max() != B - 1
+    ):
+        raise RuntimeError("Batch IDs must be contiguous starting at 0.")
 
     N, D = x.size()  # total number of nodes, feature dimension
-    L_max = batch.bincount(minlength=B).max().item()  # max number of nodes per graph
+    L_max = int(
+        batch.bincount(minlength=B).max().item()
+    )  # max number of nodes per graph
 
-    for t in args:
-        assert t.size(0) == N, "All input tensors must have same first dimension as x."
-        assert t.dim() == 2, "All input tensors must be 2D, same as x."
+    for t_ in t:
+        assert t_.size(0) == N, "All input tensors must have same first dimension as x."
+        assert t_.dim() == 2, "All input tensors must be 2D, same as x."
 
     outs = []
     outs.append(torch.zeros((B, L_max, D), device=device, dtype=x.dtype))
-    for t in args:
-        _, D_t = t.size()
-        outs.append(torch.zeros((B, L_max, D_t), device=device, dtype=t.dtype))
+    for t_ in t:
+        _, D_t = t_.size()
+        outs.append(torch.zeros((B, L_max, D_t), device=device, dtype=t_.dtype))
 
     mask_out = torch.zeros((B, L_max), dtype=torch.bool, device=device)
-    idx_out: list[torch.LongTensor] = []
+    idx_out: List[torch.Tensor] = []
 
     global_idx = torch.arange(batch.size(0), device=x.device)
-    for b in batch.unique(sorted=True):
+    for b in torch.unique(batch, sorted=True):
         mask = batch == b
         L_b = mask.sum().item()  # number of nodes in graph b
         idx = global_idx[mask]  # shape [L_b]
 
         outs[0][b, :L_b, :] = x[mask]
-        for i, t in enumerate(args, start=1):
-            outs[i][b, :L_b, :] = t[mask]
+        for i, t_ in enumerate(t, start=1):
+            outs[i][b, :L_b, :] = t_[mask]
 
         mask_out[b, :L_b] = True
         idx_out.append(idx)
 
-    return (*outs, idx_out, mask_out)
+    return outs, idx_out, mask_out
 
 
+@torch.jit.script
 def reorder_from_graph_batches(
-    x_graph: torch.Tensor, idx_out: list[torch.LongTensor]
+    x_graph: torch.Tensor, idx_out: List[torch.Tensor]
 ) -> torch.Tensor:
     """
     Reorder node features from graph-batched format back to original node order.
@@ -148,7 +164,7 @@ def reorder_from_graph_batches(
     ----------
     x_graph: torch.Tensor
         Node features in graph-batched format, shape [B, L_max, D], where B is batch size, L_max is max number of nodes per graph, D is feature dimension.
-    idx_out: list[torch.LongTensor]
+    idx_out: List[torch.Tensor]
         List of (global) index tensors for each graph in the batch.
 
     Returns
@@ -178,9 +194,10 @@ def reorder_from_graph_batches(
     return x_cat[torch.argsort(all_idx)]
 
 
+@torch.jit.ignore
 def find_connected_components_undirected(
     num_nodes: int, edge_index: torch.LongTensor
-) -> list[torch.LongTensor]:
+) -> List[torch.Tensor]:
     """
     Find all connected components in an undirected graph using DFS.
 
@@ -193,7 +210,7 @@ def find_connected_components_undirected(
 
     Returns
     -------
-    components: list[torch.LongTensor]
+    components: List[torch.Tensor]
         each is a list of node indices belonging to a connected component
         ONLY nodes that appear in edge_index are included.
     """
@@ -270,7 +287,8 @@ def find_local_edge_index(
     )
     node_map[node_mask] = torch.arange(num_nodes_b, device=edge_index.device)
 
-    src, dst = edge_index
+    src = edge_index[0]
+    dst = edge_index[1]
     mask = node_mask[src] & node_mask[dst]
     edge_index_b = edge_index[:, mask]
 
