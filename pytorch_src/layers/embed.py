@@ -20,12 +20,11 @@ class PositionalEmbedding(torch.nn.Module):
         """
         super(PositionalEmbedding, self).__init__()
 
-        pe = torch.zeros(max_len, d_model).float()
-        pe.require_grad = False
+        pe = torch.zeros(max_len, d_model)
 
-        position = torch.arange(0, max_len).float().unsqueeze(1)
+        position = torch.arange(0, max_len).unsqueeze(1)
         div_term = torch.exp(
-            torch.arange(0, d_model, 2).float() * -(math.log(10000.0) / d_model)
+            torch.arange(0, d_model, 2) * -(math.log(10000.0) / d_model)
         )
 
         pe[:, 0::2] = torch.sin(position * div_term)
@@ -49,11 +48,6 @@ class PositionalEmbedding(torch.nn.Module):
             Tensor with positional encodings added, of the same shape as input x.
         """
         if x.dim() == 2:
-            x = x.unsqueeze(2)  # [batch_size, seq_len] -> [batch_size, seq_len, 1]
-
-        if x.size(1) > self.pe.size(1):
-            raise ValueError(
-                f"Input sequence length {x.size(1)} exceeds maximum length {self.pe.size(1)}"
-            )
+            x = x.unsqueeze(-1)  # [batch_size, seq_len] -> [batch_size, seq_len, 1]
 
         return x + self.pe[:, : x.size(1), :]
