@@ -16,7 +16,7 @@ def main(cfg: ConfigParser):
     dl = cfg.init_obj("data_loader", logger=logger)
     vdl = dl.split_validation()
 
-    model = cfg.init_obj("arch", in_feats=dl.num_features_)
+    model = cfg.init_obj("arch")
     logger.info(model)
 
     device, device_ids = prepare_device(cfg.get("n_gpu"))
@@ -31,15 +31,6 @@ def main(cfg: ConfigParser):
     optimizer = cfg.init_obj("optimizer", trainable_params)
     lr_scheduler = cfg.init_obj("lr_scheduler", optimizer)
 
-    if cfg.get("debug", False):
-        logger.info("Running in debug mode")
-        for data in dl:
-            x = data.x.to(device)
-            pos = data.pos.to(device)
-            batch = data.batch.to(device) if hasattr(data, 'batch') else None
-            model(x, pos, batch)
-            return
-
     trainer_cls = cfg.init_obj("trainer")
     trainer = trainer_cls(
         model=model,
@@ -52,11 +43,20 @@ def main(cfg: ConfigParser):
         config=cfg["trainer"],
     )
 
+    if cfg.get("debug"):
+        logger.info(
+            "Running in debug mode with a single batch. Test forward pass by exporting model to ONNX."
+        )
+        trainer.export_onnx("my_model.onnx")
+        return
+
     trainer.train()
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Training script for NPS SRO ML project.")
+    parser = argparse.ArgumentParser(
+        description="Training script for NPS SRO ML project."
+    )
 
     parser.add_argument(
         "-c", "--config", type=str, default=None, help="Path to a config file."

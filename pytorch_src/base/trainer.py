@@ -10,6 +10,10 @@ from typing import Optional
 
 
 class BaseTrainer(ABC):
+    """
+    Base class for all trainers. User should inherit this class and implement `_train_epoch` logic.
+    """
+
     def __init__(
         self,
         model: torch.nn.Module,
@@ -48,22 +52,37 @@ class BaseTrainer(ABC):
     @abstractmethod
     def _train_epoch(self, epoch) -> dict:
         """
+        Training logic for an epoch. User must override this method in their subclass.
+
         Parameters
         ----------
         epoch : int
-            Current epoch number
+            Current epoch number.
+
         Returns
         -------
         log : dict
-            Dictionary containing average loss and metric values for the epoch
+            Dictionary containing average loss and metric values for the epoch.
         """
         raise NotImplementedError
 
+    def export_onnx(
+        self,
+        pth: str | pathlib.Path,
+    ):
+        """
+        Export the current model to ONNX format. If not overridden, no actual export will be performed. Note that the model should be set to eval mode before export.
+
+        Parameters
+        ----------
+        pth : str or pathlib.Path
+            Path to save the ONNX model file.
+        """
+        self.model.eval()
+
     def train(self) -> "BaseTrainer":
         """
-        Full training logic
-        Returns
-        -------
+        Train the model for a number of epochs. For each epoch, it calls the `_train_epoch` method and logs the results.
         """
         not_improved_count = 0
         for epoch in range(self.start_epoch, self.epochs + 1):
@@ -104,7 +123,17 @@ class BaseTrainer(ABC):
 
         return self
 
-    def _save_checkpoint(self, epoch, save_best=False):
+    def _save_checkpoint(self, epoch: int, save_best=False):
+        """
+        Save the model to disk. If save_best is True, also save a copy as the best model. If export_onnx is overridden, it will also attempt to export the best model to ONNX format.
+
+        Parameters
+        ----------
+        epoch : int
+            Current epoch number to include in the checkpoint filename.
+        save_best : bool
+            Whether to save a copy of the checkpoint as the best model.
+        """
         state = {
             "arch": type(self.model).__name__,
             "module": self.model.__class__.__module__,
@@ -125,7 +154,17 @@ class BaseTrainer(ABC):
             self.logger.info(f"Saving current best: {best_path} ...")
             torch.save(state, best_path)
 
+            try:
+                onnx_path = self.checkpoint_dir / "model_best.onnx"
+                self.logger.info(f"Exporting current best to ONNX: {onnx_path} ...")
+                self.export_onnx(onnx_path)
+            except Exception as e:
+                self.logger.error(f"Failed to export ONNX model: {e}")
+
     def _resume_checkpoint(self, resume_path: str | pathlib.Path):
+        """
+        Resume from saved checkpoints. Currently not supported.
+        """
         raise NotImplementedError
 
     def _prepare_model_metadata(self) -> dict:
