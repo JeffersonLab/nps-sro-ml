@@ -123,7 +123,7 @@ class BaseObjectCondensationTrainer(BaseTrainer):
         x_out : torch.Tensor
         mask : torch.Tensor
         """
-        return x, torch.ones(x.shape[:-1], dtype=torch.bool, device=x.device)
+        return x, torch.ones(x.shape, dtype=torch.bool, device=x.device)
 
     def _preprocess_features(self, data) -> torch.Tensor:
         """
