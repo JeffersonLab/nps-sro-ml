@@ -48,6 +48,30 @@ def main(cfg: ConfigParser):
             "Running in debug mode with a single batch. Test forward pass by exporting model to ONNX."
         )
         trainer.export_onnx("my_model.onnx")
+
+        # load the ONNX model and run inference to verify it works
+        import onnxruntime as ort
+
+        ort_session = ort.InferenceSession("my_model.onnx")
+
+        n_inputs = len(ort_session.get_inputs())
+        n_outputs = len(ort_session.get_outputs())
+        logger.info(f"ONNX model has {n_inputs} inputs and {n_outputs} outputs.")
+
+        # load the input and output names and shapes from the ONNX model
+
+        for i in range(n_inputs):
+            input_name = ort_session.get_inputs()[i].name
+            input_shape = ort_session.get_inputs()[i].shape
+            logger.info(f"Input {i}: name={input_name}, shape={input_shape}")
+
+        for i in range(n_outputs):
+            output_name = ort_session.get_outputs()[i].name
+            output_shape = ort_session.get_outputs()[i].shape
+            logger.info(f"Output {i}: name={output_name}, shape={output_shape}")
+
+        logger.info("ONNX model inference successful. Exiting debug mode.")
+
         return
 
     trainer.train()
