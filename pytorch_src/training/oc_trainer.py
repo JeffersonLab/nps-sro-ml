@@ -63,10 +63,6 @@ def create_sample_mask(
             perm = torch.randperm(bkg_indices.size(0), device=device)
             selected = bkg_indices[perm[:nb_keep]]
             mask[selected] = True
-        else:
-            raise ValueError(
-                "nb_keep is zero, no background nodes will be kept. This should never happen."
-            )
 
     return mask
 
@@ -227,6 +223,16 @@ class BaseObjectCondensationTrainer(BaseTrainer):
         x, fea_mask = self._unpack_features(x)
         return x, pos, fea_mask, node_mask, idx_out
 
+    def _get_batch_vector(
+        self, x: torch.Tensor, batch: Optional[torch.Tensor]
+    ) -> torch.LongTensor:
+        """
+        Return a valid batch vector. Single-graph inputs are treated as batch 0.
+        """
+        if batch is None:
+            return torch.zeros(x.shape[0], dtype=torch.long, device=x.device)
+        return batch
+
     def _apply_downsampling(
         self,
         x: torch.Tensor,
@@ -289,7 +295,7 @@ class BaseObjectCondensationTrainer(BaseTrainer):
             x = self._preprocess_features(data)
             y = data.y.squeeze(-1).long()
             pos = data.pos
-            batch = getattr(data, "batch", None)
+            batch = self._get_batch_vector(x, getattr(data, "batch", None))
             object_ids = create_unique_object_ids(y, batch, noise_idx)
 
             x, pos, batch, object_ids = self._apply_downsampling(
@@ -360,7 +366,7 @@ class BaseObjectCondensationTrainer(BaseTrainer):
                 x = self._preprocess_features(data)
                 pos = data.pos
                 y = data.y.squeeze(-1).long()
-                batch = getattr(data, "batch", None)
+                batch = self._get_batch_vector(x, getattr(data, "batch", None))
                 object_ids = create_unique_object_ids(y, batch, noise_idx)
 
                 x, pos, fea_mask, node_mask, idx_out = self._prepare_graph_inputs(
@@ -411,10 +417,16 @@ class BaseObjectCondensationTrainer(BaseTrainer):
         """
         self.model.eval()
         data = next(iter(self.dataloader))
+        data = data.to(self.device)
         pos = data.pos
-        x = data.x
-        batch = data.batch if hasattr(data, 'batch') else None
+        x = self._preprocess_features(data)
+        y = data.y.squeeze(-1).long()
+        batch = self._get_batch_vector(x, getattr(data, "batch", None))
 
+        noise_idx = self.config.get("noise_idx", -1)
+        object_ids = create_unique_object_ids(y, batch, noise_idx)
+
+        x, pos, batch, object_ids = self._apply_downsampling(x, pos, batch, object_ids)
         x, pos, fea_mask, node_mask, _ = self._prepare_graph_inputs(x, pos, batch)
 
         batch_size = Dim("batch_size", min=1)
@@ -478,8 +490,8 @@ class WaveformOCTrainer(BaseObjectCondensationTrainer):
         """
         Load VME and VTP configuration from CSV files if specified in the config. The configurations are stored as dicts of tensors keyed by column name (excluding 'channel').
         """
-        vme_path = self.config.get("vme_config_path", None)
-        vtp_path = self.config.get("vtp_config_path", None)
+        vme_path = self.config.get("vme_config_path", self.config.get("vme_config"))
+        vtp_path = self.config.get("vtp_config_path", self.config.get("vtp_config"))
         self.vme_config = self._load_vme_config(vme_path)
         self.vtp_config = self._load_vtp_config(vtp_path)
 
@@ -579,9 +591,12 @@ class WaveformOCTrainer(BaseObjectCondensationTrainer):
                 f"Channels tensor length ({channels.shape[0]}) does not match number of waveforms ({wf.shape[0]})."
             )
 
-        if wf.shape[0] > ped.shape[0]:
+        if channels.numel() > 0 and (
+            channels.min() < 0 or channels.max() >= ped.shape[0]
+        ):
             raise ValueError(
-                f"Number of channels in waveform ({wf.shape[0]}) exceeds pedestal size ({ped.shape[0]})."
+                f"Waveform channels must be in [0, {ped.shape[0]}), got "
+                f"[{channels.min().item()}, {channels.max().item()}]."
             )
 
         wf = wf - ped.to(wf.device)[channels.long()]
