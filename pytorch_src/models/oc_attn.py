@@ -27,7 +27,8 @@ class ObjectCondensationModel(BaseModel):
         self.wf_enc_layers = kwargs.get('wf_enc_layers', 2)
         self.wf_enc_heads = kwargs.get('wf_enc_heads', 4)
         self.wf_enc_dropout = kwargs.get('wf_enc_dropout', 0.1)
-        self.wf_enc_ff = kwargs.get('wf_enc_ff', self.wf_enc_d_model * 4)
+        # WaveformEncoder expects a feedforward width multiplier, not an absolute size.
+        self.wf_enc_ff = kwargs.get('wf_enc_ff', 4)
 
         # if pulse set encoder is used.
         self.embed_in = kwargs.get('embed_in', 2)
@@ -53,6 +54,12 @@ class ObjectCondensationModel(BaseModel):
             self.fea_encoder = PulseSetEncoder(
                 hidden=self.embed_in, out_dim=self.embed_out
             )
+            # Keep node feature width consistent for geometric fusion and attention.
+            self.fea_proj = (
+                nn.Identity()
+                if self.embed_out == self.d_model
+                else nn.Linear(self.embed_out, self.d_model)
+            )
 
         elif self.input_type == "waveform":
             self.fea_encoder = WaveformEncoder(
@@ -63,6 +70,7 @@ class ObjectCondensationModel(BaseModel):
                 ff_mult=self.wf_enc_ff,
                 out_dim=self.d_model,
             )
+            self.fea_proj = nn.Identity()
         else:
             raise ValueError(f"Unknown input_type {self.input_type}")
 
@@ -131,11 +139,15 @@ class ObjectCondensationModel(BaseModel):
         Parameters
         ----------
         x : torch.Tensor
-            Input features (e.g., pulse sets or waveforms) of shape (batch_size, num_nodes, feature_dim).
+            Input features with shape determined by `input_type`:
+            - `pulse_set`: (batch_size, num_nodes, num_pulses, 2)
+            - `waveform`: (batch_size, num_nodes, waveform_length)
         pos : torch.Tensor
             Geometric positions of shape (batch_size, num_nodes, pos_dim).
         fea_mask : torch.Tensor
-            Mask for input features, shape (batch_size, num_nodes).
+            Mask for input features with shape determined by `input_type`:
+            - `pulse_set`: (batch_size, num_nodes, num_pulses)
+            - `waveform`: (batch_size, num_nodes, waveform_length)
         node_mask : torch.Tensor
             Mask for valid nodes, shape (batch_size, num_nodes).
 
@@ -146,11 +158,65 @@ class ObjectCondensationModel(BaseModel):
             - pos_out: Predicted positions of shape (batch_size, num_nodes, pos_dim).
             - beta: Condensation scores of shape (batch_size, num_nodes, 1).
         """
+        if pos.ndim != 3:
+            raise ValueError(
+                f"Expected pos with 3 dims [B, N, pos_dim], got shape {tuple(pos.shape)}"
+            )
+
+        if node_mask.ndim != 2:
+            raise ValueError(
+                f"Expected node_mask with 2 dims [B, N], got shape {tuple(node_mask.shape)}"
+            )
+
+        if pos.shape[:2] != node_mask.shape:
+            raise ValueError(
+                "pos and node_mask must share [B, N] dimensions, got "
+                f"{tuple(pos.shape[:2])} vs {tuple(node_mask.shape)}"
+            )
+
+        if self.input_type == "pulse_set":
+            if x.ndim != 4 or x.shape[-1] != 2:
+                raise ValueError(
+                    "For input_type='pulse_set', expected x shape [B, N, P, 2], got "
+                    f"{tuple(x.shape)}"
+                )
+            if fea_mask.ndim != 3:
+                raise ValueError(
+                    "For input_type='pulse_set', expected fea_mask shape [B, N, P], got "
+                    f"{tuple(fea_mask.shape)}"
+                )
+            if x.shape[:-1] != fea_mask.shape:
+                raise ValueError(
+                    "For input_type='pulse_set', x and fea_mask shapes are incompatible: "
+                    f"x[:-1]={tuple(x.shape[:-1])}, fea_mask={tuple(fea_mask.shape)}"
+                )
+        else:
+            if x.ndim != 3:
+                raise ValueError(
+                    "For input_type='waveform', expected x shape [B, N, T], got "
+                    f"{tuple(x.shape)}"
+                )
+            if fea_mask.ndim != 3:
+                raise ValueError(
+                    "For input_type='waveform', expected fea_mask shape [B, N, T], got "
+                    f"{tuple(fea_mask.shape)}"
+                )
+            if x.shape != fea_mask.shape:
+                raise ValueError(
+                    "For input_type='waveform', x and fea_mask must have the same shape, got "
+                    f"{tuple(x.shape)} vs {tuple(fea_mask.shape)}"
+                )
+
+        if x.shape[:2] != pos.shape[:2]:
+            raise ValueError(
+                "x and pos must share [B, N] dimensions, got "
+                f"{tuple(x.shape[:2])} vs {tuple(pos.shape[:2])}"
+            )
+
         x = self.fea_encoder(x, fea_mask)
+        x = self.fea_proj(x)
 
         pos = self.geo_mlp(pos)  # [G, N, 2] -> [G, N, d_model]
-
-        print(x.shape, pos.shape)
 
         # add geo positional embedding
         x = x + pos  # [G, N, d_model]
