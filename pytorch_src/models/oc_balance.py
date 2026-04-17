@@ -77,19 +77,24 @@ class LatentCrossBlock(nn.Module):
 
     def __init__(self, d_model: int, num_heads: int, num_latents: int, dropout: float):
         super().__init__()
+        if d_model % num_heads != 0:
+            raise ValueError(
+                f"d_model ({d_model}) must be divisible by num_heads ({num_heads})."
+            )
+
+        self.num_heads = num_heads
+        self.head_dim = d_model // num_heads
         self.latents = nn.Parameter(torch.randn(1, num_latents, d_model))
-        self.latent_to_nodes = nn.MultiheadAttention(
-            embed_dim=d_model,
-            num_heads=num_heads,
-            dropout=dropout,
-            batch_first=True,
-        )
-        self.nodes_to_latent = nn.MultiheadAttention(
-            embed_dim=d_model,
-            num_heads=num_heads,
-            dropout=dropout,
-            batch_first=True,
-        )
+        self.null_node = nn.Parameter(torch.randn(1, 1, d_model))
+        self.latent_q = nn.Linear(d_model, d_model)
+        self.latent_k = nn.Linear(d_model, d_model)
+        self.latent_v = nn.Linear(d_model, d_model)
+        self.latent_out = nn.Linear(d_model, d_model)
+        self.node_q = nn.Linear(d_model, d_model)
+        self.node_k = nn.Linear(d_model, d_model)
+        self.node_v = nn.Linear(d_model, d_model)
+        self.node_out = nn.Linear(d_model, d_model)
+        self.attn_dropout = nn.Dropout(dropout)
         self.node_mlp = ResidualMLPBlock(
             d_model=d_model, hidden_mult=2, dropout=dropout
         )
@@ -99,40 +104,91 @@ class LatentCrossBlock(nn.Module):
         self.node_norm = nn.LayerNorm(d_model)
         self.latent_norm = nn.LayerNorm(d_model)
 
+    def _split_heads(self, x: torch.Tensor) -> torch.Tensor:
+        batch_size, seq_len, _ = x.shape
+        x = x.reshape(batch_size, seq_len, self.num_heads, self.head_dim)
+        return x.permute(0, 2, 1, 3)
+
+    def _merge_heads(self, x: torch.Tensor) -> torch.Tensor:
+        batch_size, _, seq_len, _ = x.shape
+        x = x.permute(0, 2, 1, 3)
+        return x.reshape(batch_size, seq_len, self.num_heads * self.head_dim)
+
+    def _cross_attention(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        key_padding_mask: torch.Tensor,
+        q_proj: nn.Linear,
+        k_proj: nn.Linear,
+        v_proj: nn.Linear,
+        out_proj: nn.Linear,
+    ) -> torch.Tensor:
+        q = self._split_heads(q_proj(query))
+        k = self._split_heads(k_proj(key))
+        v = self._split_heads(v_proj(value))
+
+        scores = torch.matmul(q, k.transpose(-2, -1))
+        scores = scores / (self.head_dim**0.5)
+        scores = scores.masked_fill(
+            key_padding_mask.unsqueeze(1).unsqueeze(1),
+            torch.finfo(scores.dtype).min,
+        )
+        attn = torch.softmax(scores, dim=-1)
+        attn = self.attn_dropout(attn)
+        out = torch.matmul(attn, v)
+        out = self._merge_heads(out)
+        return out_proj(out)
+
     def forward(self, nodes: torch.Tensor, node_mask: torch.Tensor) -> torch.Tensor:
         node_mask = node_mask.to(dtype=torch.bool)
-        out = nodes.new_zeros(nodes.shape)
-        valid_batch = node_mask.any(dim=1)
-        if not valid_batch.any():
-            return out
+        node_mask_f = node_mask.unsqueeze(-1).to(nodes.dtype)
+        null_node = self.null_node.expand(nodes.shape[0], -1, -1)
+        nodes_with_null = torch.cat([nodes * node_mask_f, null_node], dim=1)
+        key_padding_mask = torch.cat(
+            [
+                ~node_mask,
+                torch.zeros(
+                    (node_mask.shape[0], 1),
+                    dtype=torch.bool,
+                    device=node_mask.device,
+                ),
+            ],
+            dim=1,
+        )
+        latents = self.latents.expand(nodes.shape[0], -1, -1)
 
-        nodes_valid = nodes[valid_batch]
-        mask_valid = node_mask[valid_batch]
-        key_padding_mask = ~mask_valid
-        latents = self.latents.expand(nodes_valid.shape[0], -1, -1)
-
-        latents_update, _ = self.latent_to_nodes(
+        latents_update = self._cross_attention(
             query=self.latent_norm(latents),
-            key=self.node_norm(nodes_valid),
-            value=self.node_norm(nodes_valid),
+            key=self.node_norm(nodes_with_null),
+            value=self.node_norm(nodes_with_null),
             key_padding_mask=key_padding_mask,
-            need_weights=False,
+            q_proj=self.latent_q,
+            k_proj=self.latent_k,
+            v_proj=self.latent_v,
+            out_proj=self.latent_out,
         )
         latents = latents + latents_update
         latents = self.latent_mlp(latents)
 
-        nodes_update, _ = self.nodes_to_latent(
-            query=self.node_norm(nodes_valid),
+        nodes_update = self._cross_attention(
+            query=self.node_norm(nodes),
             key=self.latent_norm(latents),
             value=self.latent_norm(latents),
-            need_weights=False,
+            key_padding_mask=torch.zeros(
+                (latents.shape[0], latents.shape[1]),
+                dtype=torch.bool,
+                device=latents.device,
+            ),
+            q_proj=self.node_q,
+            k_proj=self.node_k,
+            v_proj=self.node_v,
+            out_proj=self.node_out,
         )
-        nodes_valid = nodes_valid + nodes_update
-        nodes_valid = self.node_mlp(nodes_valid)
-        nodes_valid = nodes_valid * mask_valid.unsqueeze(-1).to(nodes_valid.dtype)
-
-        out[valid_batch] = nodes_valid
-        return out
+        nodes = nodes + nodes_update
+        nodes = self.node_mlp(nodes)
+        return nodes * node_mask_f
 
 
 class BalancedObjectCondensationModel(BaseModel):
@@ -258,90 +314,11 @@ class BalancedObjectCondensationModel(BaseModel):
             nn.Sigmoid(),
         )
 
-    def _validate_inputs(
-        self,
-        x: torch.Tensor,
-        pos: torch.Tensor,
-        fea_mask: torch.Tensor,
-        node_mask: torch.Tensor,
-    ) -> None:
-        if pos.ndim != 3:
-            raise ValueError(
-                f"Expected pos with 3 dims [B, N, pos_dim], got shape {tuple(pos.shape)}"
-            )
-        if node_mask.ndim != 2:
-            raise ValueError(
-                f"Expected node_mask with 2 dims [B, N], got shape {tuple(node_mask.shape)}"
-            )
-        if pos.shape[:2] != node_mask.shape:
-            raise ValueError(
-                "pos and node_mask must share [B, N] dimensions, got "
-                f"{tuple(pos.shape[:2])} vs {tuple(node_mask.shape)}"
-            )
-
-        if self.input_type == "pulse_set":
-            if x.ndim != 4 or x.shape[-1] != 2:
-                raise ValueError(
-                    "For input_type='pulse_set', expected x shape [B, N, P, 2], got "
-                    f"{tuple(x.shape)}"
-                )
-            if fea_mask.ndim != 3:
-                raise ValueError(
-                    "For input_type='pulse_set', expected fea_mask shape [B, N, P], got "
-                    f"{tuple(fea_mask.shape)}"
-                )
-            if x.shape[:-1] != fea_mask.shape:
-                raise ValueError(
-                    "For input_type='pulse_set', x and fea_mask shapes are incompatible: "
-                    f"x[:-1]={tuple(x.shape[:-1])}, fea_mask={tuple(fea_mask.shape)}"
-                )
-        else:
-            if x.ndim != 3:
-                raise ValueError(
-                    "For input_type='waveform', expected x shape [B, N, T], got "
-                    f"{tuple(x.shape)}"
-                )
-            if fea_mask.ndim != 3:
-                raise ValueError(
-                    "For input_type='waveform', expected fea_mask shape [B, N, T], got "
-                    f"{tuple(fea_mask.shape)}"
-                )
-            if x.shape != fea_mask.shape:
-                raise ValueError(
-                    "For input_type='waveform', x and fea_mask must have the same shape, got "
-                    f"{tuple(x.shape)} vs {tuple(fea_mask.shape)}"
-                )
-
-        if x.shape[:2] != pos.shape[:2]:
-            raise ValueError(
-                "x and pos must share [B, N] dimensions, got "
-                f"{tuple(x.shape[:2])} vs {tuple(pos.shape[:2])}"
-            )
-
-    def _position_indices(
-        self, pos: torch.Tensor, node_mask: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        pos_idx = pos.round().long()
-        valid = node_mask.to(dtype=torch.bool)
-        rows = pos_idx[..., 0]
-        cols = pos_idx[..., 1]
-
-        if valid.any():
-            row_ok = (rows[valid] >= 0) & (rows[valid] < self.grid_rows)
-            col_ok = (cols[valid] >= 0) & (cols[valid] < self.grid_cols)
-            if not torch.all(row_ok & col_ok):
-                raise ValueError(
-                    "Valid node positions must fall inside the detector grid "
-                    f"[0, {self.grid_rows}) x [0, {self.grid_cols})."
-                )
-
-        return rows, cols
-
     def _normalize_pos(self, pos: torch.Tensor) -> torch.Tensor:
         scale = pos.new_tensor(
             [
-                max(self.grid_rows - 1, 1),
                 max(self.grid_cols - 1, 1),
+                max(self.grid_rows - 1, 1),
             ]
         )
         return pos / scale
@@ -353,19 +330,15 @@ class BalancedObjectCondensationModel(BaseModel):
         cols: torch.Tensor,
         node_mask: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        batch_size, num_nodes, channels = x.shape
-        valid = node_mask.to(dtype=torch.bool)
+        rows = rows.clamp(0, self.grid_rows - 1)
+        cols = cols.clamp(0, self.grid_cols - 1)
+        row_hot = F.one_hot(rows, num_classes=self.grid_rows).to(x.dtype)
+        col_hot = F.one_hot(cols, num_classes=self.grid_cols).to(x.dtype)
+        spatial = row_hot.unsqueeze(-1) * col_hot.unsqueeze(-2)
+        spatial = spatial * node_mask.unsqueeze(-1).unsqueeze(-1).to(x.dtype)
 
-        grid = x.new_zeros(batch_size, channels, self.grid_rows, self.grid_cols)
-        occupancy = x.new_zeros(batch_size, 1, self.grid_rows, self.grid_cols)
-        batch_idx = (
-            torch.arange(batch_size, device=x.device)
-            .unsqueeze(1)
-            .expand(batch_size, num_nodes)
-        )
-
-        grid[batch_idx[valid], :, rows[valid], cols[valid]] = x[valid]
-        occupancy[batch_idx[valid], 0, rows[valid], cols[valid]] = 1.0
+        grid = torch.einsum("bnrc,bnd->bdrc", spatial, x)
+        occupancy = spatial.sum(dim=1, keepdim=True)
         return grid, occupancy
 
     def _gather_from_grid(
@@ -375,19 +348,13 @@ class BalancedObjectCondensationModel(BaseModel):
         cols: torch.Tensor,
         node_mask: torch.Tensor,
     ) -> torch.Tensor:
-        batch_size, channels, _, _ = grid.shape
-        num_nodes = rows.shape[1]
-        valid = node_mask.to(dtype=torch.bool)
-        batch_idx = (
-            torch.arange(batch_size, device=grid.device)
-            .unsqueeze(1)
-            .expand(batch_size, num_nodes)
-        )
-
-        gathered = grid.new_zeros(batch_size, num_nodes, channels)
-        grid = grid.permute(0, 2, 3, 1)
-        gathered[valid] = grid[batch_idx[valid], rows[valid], cols[valid]]
-        return gathered
+        rows = rows.clamp(0, self.grid_rows - 1)
+        cols = cols.clamp(0, self.grid_cols - 1)
+        row_hot = F.one_hot(rows, num_classes=self.grid_rows).to(grid.dtype)
+        col_hot = F.one_hot(cols, num_classes=self.grid_cols).to(grid.dtype)
+        spatial = row_hot.unsqueeze(-1) * col_hot.unsqueeze(-2)
+        gathered = torch.einsum("bnrc,bdrc->bnd", spatial, grid)
+        return gathered * node_mask.unsqueeze(-1).to(gathered.dtype)
 
     def _geometry_embedding(
         self,
@@ -408,9 +375,9 @@ class BalancedObjectCondensationModel(BaseModel):
         fea_mask: torch.Tensor,
         node_mask: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        self._validate_inputs(x, pos, fea_mask, node_mask)
 
-        rows, cols = self._position_indices(pos, node_mask)
+        cols = pos[..., 0].round().long()
+        rows = pos[..., 1].round().long()
 
         x = self.fea_encoder(x, fea_mask)
         x = self.fea_proj(x)
