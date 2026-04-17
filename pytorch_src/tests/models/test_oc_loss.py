@@ -1,6 +1,62 @@
 import pytest
 import torch
 from models.oc_loss import *
+import models.oc_loss as oc_loss_module
+
+
+def test_oc_loss_per_batch_fallback_matches_per_graph_sum(monkeypatch):
+    monkeypatch.setattr(oc_loss_module, "HAS_TORCH_SCATTER", False)
+
+    x = torch.tensor(
+        [
+            [0.0, 0.0],
+            [0.2, 0.0],
+            [1.2, 0.0],
+            [0.0, 0.0],
+            [0.3, 0.0],
+            [1.5, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    beta = torch.tensor([0.9, 0.8, 0.2, 0.85, 0.75, 0.1], dtype=torch.float32)
+    object_id = torch.tensor([1, 1, 0, 2, 2, 0], dtype=torch.long)
+    batch = torch.tensor([0, 0, 0, 1, 1, 1], dtype=torch.long)
+
+    attr = oc_attr_loss_per_batch(x, beta, object_id, q_min=0.1, noise_idx=0, batch=batch)
+    repul = oc_repul_loss_per_batch(
+        x, beta, object_id, q_min=0.1, noise_idx=0, margin=1.0, batch=batch
+    )
+    coward = oc_coward_loss_per_batch(beta, object_id, noise_idx=0, batch=batch)
+    noise = oc_noise_loss_per_batch(beta, object_id, noise_idx=0, batch=batch)
+
+    attr_expected = oc_attr_loss_per_graph(x[batch == 0], beta[batch == 0], object_id[batch == 0], q_min=0.1, noise_idx=0)
+    attr_expected += oc_attr_loss_per_graph(x[batch == 1], beta[batch == 1], object_id[batch == 1], q_min=0.1, noise_idx=0)
+
+    repul_expected = oc_repul_loss_per_graph(
+        x[batch == 0], beta[batch == 0], object_id[batch == 0], q_min=0.1, noise_idx=0, margin=1.0
+    )
+    repul_expected += oc_repul_loss_per_graph(
+        x[batch == 1], beta[batch == 1], object_id[batch == 1], q_min=0.1, noise_idx=0, margin=1.0
+    )
+
+    coward_expected = oc_coward_loss_per_graph(
+        beta[batch == 0], object_id[batch == 0], noise_idx=0
+    )
+    coward_expected += oc_coward_loss_per_graph(
+        beta[batch == 1], object_id[batch == 1], noise_idx=0
+    )
+
+    noise_expected = oc_noise_loss_per_graph(
+        beta[batch == 0], object_id[batch == 0], noise_idx=0
+    )
+    noise_expected += oc_noise_loss_per_graph(
+        beta[batch == 1], object_id[batch == 1], noise_idx=0
+    )
+
+    assert torch.isclose(attr, attr_expected, atol=1e-6)
+    assert torch.isclose(repul, repul_expected, atol=1e-6)
+    assert torch.isclose(coward, coward_expected, atol=1e-6)
+    assert torch.isclose(noise, noise_expected, atol=1e-6)
 
 
 class TestOcAttrLossPerGraphNaive:

@@ -26,6 +26,48 @@ class MockDataset(InMemoryDataset):
         return self._data_list[idx]
 
 
+class PlainPygDataDataset:
+    def __init__(self, num_samples=4):
+        self.samples = []
+        for i in range(num_samples):
+            x = np.random.randn(10, 5).astype(np.float32)
+            edge_index = np.array([[0, 1, 2], [1, 2, 3]], dtype=np.int64)
+            y = np.arange(10, dtype=np.int64) + i
+            pos = np.stack([np.arange(10), np.arange(10)], axis=1).astype(np.float32)
+            self.samples.append(Data(x=x, edge_index=edge_index, y=y, pos=pos))
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        return self.samples[idx]
+
+
+class SimpleGraphData:
+    def __init__(self, x, edge_index, y, pos):
+        self.x = x
+        self.edge_index = edge_index
+        self.y = y
+        self.pos = pos
+
+
+class SimpleTorchDataset:
+    def __init__(self, num_samples=4):
+        self.samples = []
+        for i in range(num_samples):
+            x = np.random.randn(10, 5).astype(np.float32)
+            edge_index = np.array([[0, 1, 2], [1, 2, 3]], dtype=np.int64)
+            y = np.arange(10, dtype=np.int64) + i
+            pos = np.stack([np.arange(10), np.arange(10)], axis=1).astype(np.float32)
+            self.samples.append(SimpleGraphData(x=x, edge_index=edge_index, y=y, pos=pos))
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        return self.samples[idx]
+
+
 class TestBaseDataLoader:
 
     def test_initialization_no_validation(self):
@@ -174,3 +216,55 @@ class TestBaseDataLoader:
 
         # When sampler is used, shuffle should be False in parent class
         assert dataloader.sampler is not None
+
+    def test_torch_loader_opt_in_batches_graph_data(self):
+        """Test the explicit torch-only loader path even when PyG is available."""
+        dataset = SimpleTorchDataset(num_samples=4)
+        dataloader = BaseDataLoader(
+            dataset,
+            batch_size=2,
+            validation_split=0.0,
+            use_torch_loader=True,
+        )
+
+        batch = next(iter(dataloader))
+
+        assert hasattr(batch, "x")
+        assert hasattr(batch, "batch")
+        assert batch.x.shape[0] == 20
+        assert batch.batch.shape[0] == 20
+        assert batch.batch.max().item() == 1
+
+    def test_torch_loader_opt_in_split_validation(self):
+        """Validation loader should preserve the explicit torch-only path."""
+        dataset = SimpleTorchDataset(num_samples=10)
+        dataloader = BaseDataLoader(
+            dataset,
+            batch_size=2,
+            validation_split=0.2,
+            use_torch_loader=True,
+        )
+
+        val_loader = dataloader.split_validation()
+        batch = next(iter(val_loader))
+
+        assert hasattr(batch, "x")
+        assert hasattr(batch, "batch")
+
+    def test_torch_loader_opt_in_batches_pyg_data_objects(self):
+        """Torch-only collate should also work on plain PyG Data samples."""
+        dataset = PlainPygDataDataset(num_samples=4)
+        dataloader = BaseDataLoader(
+            dataset,
+            batch_size=2,
+            validation_split=0.0,
+            use_torch_loader=True,
+        )
+
+        batch = next(iter(dataloader))
+
+        assert hasattr(batch, "x")
+        assert hasattr(batch, "edge_index")
+        assert hasattr(batch, "batch")
+        assert batch.x.shape[0] == 20
+        assert batch.batch.max().item() == 1
