@@ -2,10 +2,38 @@ import pathlib
 import torch
 import logging
 from typing import Optional
-from torch_geometric.data import Dataset, Data
+from torch.utils.data import Dataset as TorchDataset
 from base.dataloader import BaseDataLoader
 from utils.utils import get_logger
 from utils.graph import reindex_edge_index
+
+try:
+    from torch_geometric.data import Dataset, Data
+except ImportError:
+    class Dataset(TorchDataset):
+        """Minimal fallback Dataset compatible with the project's usage."""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+
+        def __len__(self):
+            return self.len()
+
+        def __getitem__(self, idx):
+            return self.get(idx)
+
+    class Data:
+        """Minimal fallback data container matching the attributes used downstream."""
+
+        def __init__(self, **kwargs):
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+
+        def to(self, device):
+            for key, value in self.__dict__.items():
+                if isinstance(value, torch.Tensor):
+                    setattr(self, key, value.to(device))
+            return self
 
 
 NTIME = 110
@@ -220,6 +248,7 @@ class NPSDataLoader(BaseDataLoader):
         batch_size: int = 32,
         validation_split: float = 0.0,
         num_workers: int = 1,
+        use_torch_loader: bool = False,
         **kwargs,
     ):
         """
@@ -242,7 +271,14 @@ class NPSDataLoader(BaseDataLoader):
         """
         if dataset is None:
             dataset = NPSDataset(**kwargs)
-        super().__init__(dataset, batch_size, shuffle, validation_split, num_workers)
+        super().__init__(
+            dataset,
+            batch_size,
+            shuffle,
+            validation_split,
+            num_workers,
+            use_torch_loader=use_torch_loader,
+        )
 
     def __getattr__(self, name: str) -> any:
         """

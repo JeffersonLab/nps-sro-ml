@@ -1,13 +1,116 @@
 import numpy as np
-from torch_geometric.loader import DataLoader as PygDataLoader
-from torch_geometric.data import Dataset
+import torch
+from torch.utils.data import DataLoader as TorchDataLoader
+from torch.utils.data import Dataset
+from torch.utils.data._utils.collate import default_collate
 from torch.utils.data.sampler import SubsetRandomSampler
-from typing import Optional, Union
+from typing import Any, Optional, Union
+
+try:
+    from torch_geometric.data import Batch as PygBatch
+    from torch_geometric.data import Dataset as PygDataset
+
+    Dataset = PygDataset
+    HAS_PYG = True
+except ImportError:
+    PygBatch = None
+    HAS_PYG = False
 
 
-class BaseDataLoader(PygDataLoader):
+def _as_tensor(value: Any) -> torch.Tensor:
+    if isinstance(value, torch.Tensor):
+        return value
+    return torch.as_tensor(value)
+
+
+class TorchGraphBatch:
+    """Minimal batched graph container for the torch-only dataloader path."""
+
+    def __init__(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+    def to(self, device: torch.device):
+        for key, value in self.__dict__.items():
+            if isinstance(value, torch.Tensor):
+                setattr(self, key, value.to(device))
+        return self
+
+
+def _sample_keys(sample: Any) -> list[str]:
+    if hasattr(sample, "keys") and callable(sample.keys):
+        return [key for key in sample.keys() if getattr(sample, key, None) is not None]
+    if hasattr(sample, "__dict__"):
+        return [
+            key
+            for key, value in vars(sample).items()
+            if not key.startswith("_") and value is not None
+        ]
+    return []
+
+
+def _torch_graph_collate(batch: list[Any]) -> Any:
+    if len(batch) == 0:
+        return batch
+
+    first = batch[0]
+    first_keys = _sample_keys(first)
+    if "x" not in first_keys:
+        return default_collate(batch)
+
+    keys = sorted(
+        {
+            key
+            for sample in batch
+            for key in _sample_keys(sample)
+        }
+    )
+
+    node_counts = [_as_tensor(sample.x).shape[0] for sample in batch]
+    batch_idx = [
+        torch.full((count,), idx, dtype=torch.long)
+        for idx, count in enumerate(node_counts)
+    ]
+
+    collated = {"batch": torch.cat(batch_idx, dim=0)}
+    edge_offset = 0
+
+    for key in keys:
+        values = [getattr(sample, key, None) for sample in batch]
+        values = [value for value in values if value is not None]
+        if len(values) == 0:
+            continue
+
+        tensors = [_as_tensor(value) for value in values]
+        if key == "edge_index":
+            shifted = []
+            node_offset = 0
+            for tensor, count in zip(tensors, node_counts):
+                shifted.append(tensor + node_offset)
+                node_offset += count
+            collated[key] = torch.cat(shifted, dim=1)
+            edge_offset += 1
+        elif tensors[0].ndim == 0:
+            collated[key] = torch.stack(tensors, dim=0)
+        else:
+            collated[key] = torch.cat(tensors, dim=0)
+
+    return TorchGraphBatch(**collated)
+
+
+def _pyg_graph_collate(batch: list[Any]) -> Any:
+    if not HAS_PYG:
+        return _torch_graph_collate(batch)
+    return PygBatch.from_data_list(batch)
+
+
+class BaseDataLoader(TorchDataLoader):
     """
-    Base DataLoader for PyTorch Geometric datasets with train/validation splitting.
+    Base DataLoader with train/validation splitting.
+
+    By default it uses PyG-style collation when PyG is available. Setting
+    `use_torch_loader=True` opts into the torch-only collation path even if PyG
+    is installed.
     Examples
     --------
     >>> from torch_geometric.datasets import TUDataset
@@ -26,13 +129,14 @@ class BaseDataLoader(PygDataLoader):
         validation_split: Union[float, int] = 0.0,
         num_workers: int = 0,
         random_seed: int = 0,
+        use_torch_loader: bool = False,
     ):
         """
         Initialize the BaseDataLoader.
         Parameters
         ----------
         dataset : Dataset
-            The PyTorch Geometric dataset to load data from.
+            The dataset to load data from.
         batch_size : int
             Number of samples per batch.
         shuffle : bool, optional
@@ -50,6 +154,7 @@ class BaseDataLoader(PygDataLoader):
         self.validation_split = validation_split
         self.shuffle = shuffle
         self.random_seed = random_seed
+        self.use_torch_loader = use_torch_loader
         self.dataset = dataset
 
         self.batch_idx = 0
@@ -62,6 +167,11 @@ class BaseDataLoader(PygDataLoader):
             "dataset": dataset,
             "batch_size": batch_size,
             "num_workers": num_workers,
+            "collate_fn": (
+                _torch_graph_collate
+                if self.use_torch_loader
+                else _pyg_graph_collate
+            ),
         }
 
         # When sampler is used, shuffle must be False
@@ -105,16 +215,16 @@ class BaseDataLoader(PygDataLoader):
 
         return train_sampler, valid_sampler
 
-    def split_validation(self, **kwargs) -> Optional[PygDataLoader]:
+    def split_validation(self, **kwargs) -> Optional[TorchDataLoader]:
         """
         Create a validation DataLoader using the validation split.
         Parameters
         ----------
         **kwargs : dict
-            Additional keyword arguments to pass to the PygDataLoader constructor. These will override the default initialization arguments.
+            Additional keyword arguments to pass to the underlying DataLoader constructor. These will override the default initialization arguments.
         Returns
         -------
-        Optional[PygDataLoader]
+        Optional[TorchDataLoader]
             A DataLoader for the validation set, or None if no validation split was defined.
         """
 
@@ -127,7 +237,7 @@ class BaseDataLoader(PygDataLoader):
         val_kwargs['shuffle'] = False
 
         # Validation loader uses the valid_sampler and never shuffles
-        return PygDataLoader(sampler=self.valid_sampler, **val_kwargs)
+        return TorchDataLoader(sampler=self.valid_sampler, **val_kwargs)
 
     def get_train_size(self) -> int:
         """Return the number of training samples."""

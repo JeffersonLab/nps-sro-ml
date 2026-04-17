@@ -3,10 +3,28 @@ from typing import Optional
 
 try:
     from torch_scatter import scatter_max, scatter_add, scatter_mean
+    HAS_TORCH_SCATTER = True
 except ImportError:
-    raise ImportError(
-        "torch_scatter is required for oc_loss.py. Please install `torch-scatter`, see `https://github.com/rusty1s/pytorch_scatter` for instructions."
-    )
+    HAS_TORCH_SCATTER = False
+
+
+def _sum_loss_per_graph(
+    loss_fn,
+    batch: Optional[torch.Tensor],
+    *args,
+    ref_tensor: torch.Tensor,
+    **kwargs,
+) -> torch.Tensor:
+    """Fallback path when torch_scatter is unavailable."""
+    if batch is None:
+        return loss_fn(*args, **kwargs)
+
+    loss = ref_tensor.sum() * 0.0
+    for graph_id in torch.unique(batch, sorted=True):
+        mask = batch == graph_id
+        graph_args = [arg[mask] if isinstance(arg, torch.Tensor) else arg for arg in args]
+        loss = loss + loss_fn(*graph_args, **kwargs)
+    return loss
 
 
 def oc_loss_per_batch(
@@ -86,6 +104,18 @@ def oc_attr_loss_per_batch(
     torch.Tensor
         Attractive potential loss.
     """
+    if not HAS_TORCH_SCATTER:
+        return _sum_loss_per_graph(
+            oc_attr_loss_per_graph,
+            batch,
+            x,
+            beta,
+            object_id,
+            q_min=q_min,
+            noise_idx=noise_idx,
+            ref_tensor=x,
+        )
+
     if batch is None:
         batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
 
@@ -161,6 +191,19 @@ def oc_repul_loss_per_batch(
     torch.Tensor
         Repulsive potential loss.
     """
+    if not HAS_TORCH_SCATTER:
+        return _sum_loss_per_graph(
+            oc_repul_loss_per_graph,
+            batch,
+            x,
+            beta,
+            object_id,
+            q_min=q_min,
+            noise_idx=noise_idx,
+            margin=margin,
+            ref_tensor=x,
+        )
+
     if batch is None:
         batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
 
@@ -232,6 +275,16 @@ def oc_coward_loss_per_batch(
     torch.Tensor
         Cowardice penalty loss.
     """
+    if not HAS_TORCH_SCATTER:
+        return _sum_loss_per_graph(
+            oc_coward_loss_per_graph,
+            batch,
+            beta,
+            object_id,
+            noise_idx=noise_idx,
+            ref_tensor=beta,
+        )
+
     if batch is None:
         batch = torch.zeros(beta.size(0), dtype=torch.long, device=beta.device)
 
@@ -285,6 +338,16 @@ def oc_noise_loss_per_batch(
     torch.Tensor
         Noise penalty loss.
     """
+    if not HAS_TORCH_SCATTER:
+        return _sum_loss_per_graph(
+            oc_noise_loss_per_graph,
+            batch,
+            beta,
+            object_id,
+            noise_idx=noise_idx,
+            ref_tensor=beta,
+        )
+
     if batch is None:
         batch = torch.zeros(beta.size(0), dtype=torch.long, device=beta.device)
 
