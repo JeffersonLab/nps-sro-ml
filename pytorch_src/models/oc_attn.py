@@ -158,60 +158,6 @@ class ObjectCondensationModel(BaseModel):
             - pos_out: Predicted positions of shape (batch_size, num_nodes, pos_dim).
             - beta: Condensation scores of shape (batch_size, num_nodes, 1).
         """
-        if pos.ndim != 3:
-            raise ValueError(
-                f"Expected pos with 3 dims [B, N, pos_dim], got shape {tuple(pos.shape)}"
-            )
-
-        if node_mask.ndim != 2:
-            raise ValueError(
-                f"Expected node_mask with 2 dims [B, N], got shape {tuple(node_mask.shape)}"
-            )
-
-        if pos.shape[:2] != node_mask.shape:
-            raise ValueError(
-                "pos and node_mask must share [B, N] dimensions, got "
-                f"{tuple(pos.shape[:2])} vs {tuple(node_mask.shape)}"
-            )
-
-        if self.input_type == "pulse_set":
-            if x.ndim != 4 or x.shape[-1] != 2:
-                raise ValueError(
-                    "For input_type='pulse_set', expected x shape [B, N, P, 2], got "
-                    f"{tuple(x.shape)}"
-                )
-            if fea_mask.ndim != 3:
-                raise ValueError(
-                    "For input_type='pulse_set', expected fea_mask shape [B, N, P], got "
-                    f"{tuple(fea_mask.shape)}"
-                )
-            if x.shape[:-1] != fea_mask.shape:
-                raise ValueError(
-                    "For input_type='pulse_set', x and fea_mask shapes are incompatible: "
-                    f"x[:-1]={tuple(x.shape[:-1])}, fea_mask={tuple(fea_mask.shape)}"
-                )
-        else:
-            if x.ndim != 3:
-                raise ValueError(
-                    "For input_type='waveform', expected x shape [B, N, T], got "
-                    f"{tuple(x.shape)}"
-                )
-            if fea_mask.ndim != 3:
-                raise ValueError(
-                    "For input_type='waveform', expected fea_mask shape [B, N, T], got "
-                    f"{tuple(fea_mask.shape)}"
-                )
-            if x.shape != fea_mask.shape:
-                raise ValueError(
-                    "For input_type='waveform', x and fea_mask must have the same shape, got "
-                    f"{tuple(x.shape)} vs {tuple(fea_mask.shape)}"
-                )
-
-        if x.shape[:2] != pos.shape[:2]:
-            raise ValueError(
-                "x and pos must share [B, N] dimensions, got "
-                f"{tuple(x.shape[:2])} vs {tuple(pos.shape[:2])}"
-            )
 
         x = self.fea_encoder(x, fea_mask)
         x = self.fea_proj(x)
@@ -221,7 +167,7 @@ class ObjectCondensationModel(BaseModel):
         # add geo positional embedding
         x = x + pos  # [G, N, d_model]
 
-        """
+        """ 
         if scores of (padded Q x padded K) are masked to -inf, softmax will yield NaN
         instead, we create attn mask based on key only -> scores in (padded Q x valid K)
         it is the standard approach as padded nodes should be discarded downstream
