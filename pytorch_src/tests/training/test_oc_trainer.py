@@ -97,7 +97,7 @@ def test_waveform_preprocess_checks_channel_indices(tmp_path):
 
 def test_export_onnx_uses_preprocessed_features_and_missing_batch_defaults(tmp_path, monkeypatch):
     x = torch.tensor([[10.0, 11.0], [20.0, 21.0]], dtype=torch.float32)
-    pos = torch.tensor([[0.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
+    pos = torch.tensor([[0.0, 0.0], [1.0, 0.0]], dtype=torch.float32)
     y = torch.tensor([[1.0], [2.0]], dtype=torch.float32)
     data = DummyData(x=x, pos=pos, y=y)
 
