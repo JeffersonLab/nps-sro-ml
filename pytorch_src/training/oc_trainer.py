@@ -556,7 +556,7 @@ class WaveformOCTrainer(BaseObjectCondensationTrainer):
         """
         wf = data.x
         pos = data.pos
-        channels = get_node_index_from_position(pos[:, 0], pos[:, 1])
+        channels = get_node_index_from_position(pos[:, 1], pos[:, 0])
         return self._preprocess_wf(wf, channels)
 
     def _preprocess_wf(self, wf: torch.Tensor, channels: torch.Tensor) -> torch.Tensor:
