@@ -3,14 +3,63 @@ name = "nps-sro-ml"
 description = "AI/ML application on Streaming Readout Data in NPS experiment"
 readme = "README.md"
 requires-python = ">=3.10"
+# Install examples:
+#   uv sync --extra torch-cpu
+#   uv sync --extra torch-cu130
+#   uv sync --extra torch-cu130 --extra pyg
+#   uv sync --extra torch-cu130 --extra pyg-ext-cu130
 dependencies = [
     "numpy>=1.26.2",
     "pandas>=2.1.3",
     "scipy>=1.12.0",
     "tensorboard>=2.20.0",
-    "torch==2.9.0",
     "black",
-    "ruff"
+    "ruff",
+]
+
+[project.optional-dependencies]
+torch-cpu = [
+    "torch==2.9.0",
+]
+torch-cu126 = [
+    "torch==2.9.0",
+]
+torch-cu128 = [
+    "torch==2.9.0",
+]
+torch-cu130 = [
+    "torch==2.9.0",
+]
+pyg = [
+    "torch-geometric",
+]
+pyg-ext-cpu = [
+    "torch-geometric",
+    "pyg-lib",
+    "torch-scatter",
+    "torch-sparse",
+    "torch-cluster",
+]
+pyg-ext-cu126 = [
+    "torch-geometric",
+    "pyg-lib",
+    "torch-scatter",
+    "torch-sparse",
+    "torch-cluster",
+]
+pyg-ext-cu128 = [
+    "torch-geometric",
+    "pyg-lib",
+    "torch-scatter",
+    "torch-sparse",
+    "torch-cluster",
+]
+pyg-ext-cu130 = [
+    "torch-geometric",
+    "pyg-lib",
+    "torch-scatter",
+    "torch-sparse",
+    "torch-cluster",
 ]
 
 [dependency-groups]
@@ -19,15 +68,190 @@ dev = [
 ]
 
 [tool.uv.sources]
-torch = [{ index = "pytorch-cu130" }]
+torch = [
+    { index = "pytorch-cpu", extra = "torch-cpu" },
+    { index = "pytorch-cu126", extra = "torch-cu126" },
+    { index = "pytorch-cu128", extra = "torch-cu128" },
+    { index = "pytorch-cu130", extra = "torch-cu130" },
+]
+pyg-lib = [
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cpu/pyg_lib-0.6.0+pt29cpu-cp310-cp310-linux_x86_64.whl", marker = "python_version == '3.10' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cpu" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cpu/pyg_lib-0.6.0+pt29cpu-cp311-cp311-linux_x86_64.whl", marker = "python_version == '3.11' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cpu" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cpu/pyg_lib-0.6.0+pt29cpu-cp312-cp312-linux_x86_64.whl", marker = "python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cpu" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu126/pyg_lib-0.6.0+pt29cu126-cp310-cp310-linux_x86_64.whl", marker = "python_version == '3.10' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu126" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu126/pyg_lib-0.6.0+pt29cu126-cp311-cp311-linux_x86_64.whl", marker = "python_version == '3.11' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu126" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu126/pyg_lib-0.6.0+pt29cu126-cp312-cp312-linux_x86_64.whl", marker = "python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu126" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu128/pyg_lib-0.6.0+pt29cu128-cp310-cp310-linux_x86_64.whl", marker = "python_version == '3.10' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu128" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu128/pyg_lib-0.6.0+pt29cu128-cp311-cp311-linux_x86_64.whl", marker = "python_version == '3.11' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu128" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu128/pyg_lib-0.6.0+pt29cu128-cp312-cp312-linux_x86_64.whl", marker = "python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu128" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu130/pyg_lib-0.6.0+pt29cu130-cp310-cp310-linux_x86_64.whl", marker = "python_version == '3.10' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu130" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu130/pyg_lib-0.6.0+pt29cu130-cp311-cp311-linux_x86_64.whl", marker = "python_version == '3.11' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu130" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu130/pyg_lib-0.6.0+pt29cu130-cp312-cp312-linux_x86_64.whl", marker = "python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu130" },
+]
+torch-scatter = [
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cpu/torch_scatter-2.1.2+pt29cpu-cp310-cp310-linux_x86_64.whl", marker = "python_version == '3.10' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cpu" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cpu/torch_scatter-2.1.2+pt29cpu-cp311-cp311-linux_x86_64.whl", marker = "python_version == '3.11' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cpu" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cpu/torch_scatter-2.1.2+pt29cpu-cp312-cp312-linux_x86_64.whl", marker = "python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cpu" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu126/torch_scatter-2.1.2+pt29cu126-cp310-cp310-linux_x86_64.whl", marker = "python_version == '3.10' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu126" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu126/torch_scatter-2.1.2+pt29cu126-cp311-cp311-linux_x86_64.whl", marker = "python_version == '3.11' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu126" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu126/torch_scatter-2.1.2+pt29cu126-cp312-cp312-linux_x86_64.whl", marker = "python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu126" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu128/torch_scatter-2.1.2+pt29cu128-cp310-cp310-linux_x86_64.whl", marker = "python_version == '3.10' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu128" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu128/torch_scatter-2.1.2+pt29cu128-cp311-cp311-linux_x86_64.whl", marker = "python_version == '3.11' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu128" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu128/torch_scatter-2.1.2+pt29cu128-cp312-cp312-linux_x86_64.whl", marker = "python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu128" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu130/torch_scatter-2.1.2+pt29cu130-cp310-cp310-linux_x86_64.whl", marker = "python_version == '3.10' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu130" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu130/torch_scatter-2.1.2+pt29cu130-cp311-cp311-linux_x86_64.whl", marker = "python_version == '3.11' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu130" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu130/torch_scatter-2.1.2+pt29cu130-cp312-cp312-linux_x86_64.whl", marker = "python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu130" },
+]
+torch-sparse = [
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cpu/torch_sparse-0.6.18+pt29cpu-cp310-cp310-linux_x86_64.whl", marker = "python_version == '3.10' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cpu" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cpu/torch_sparse-0.6.18+pt29cpu-cp311-cp311-linux_x86_64.whl", marker = "python_version == '3.11' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cpu" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cpu/torch_sparse-0.6.18+pt29cpu-cp312-cp312-linux_x86_64.whl", marker = "python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cpu" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu126/torch_sparse-0.6.18+pt29cu126-cp310-cp310-linux_x86_64.whl", marker = "python_version == '3.10' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu126" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu126/torch_sparse-0.6.18+pt29cu126-cp311-cp311-linux_x86_64.whl", marker = "python_version == '3.11' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu126" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu126/torch_sparse-0.6.18+pt29cu126-cp312-cp312-linux_x86_64.whl", marker = "python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu126" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu128/torch_sparse-0.6.18+pt29cu128-cp310-cp310-linux_x86_64.whl", marker = "python_version == '3.10' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu128" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu128/torch_sparse-0.6.18+pt29cu128-cp311-cp311-linux_x86_64.whl", marker = "python_version == '3.11' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu128" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu128/torch_sparse-0.6.18+pt29cu128-cp312-cp312-linux_x86_64.whl", marker = "python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu128" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu130/torch_sparse-0.6.18+pt29cu130-cp310-cp310-linux_x86_64.whl", marker = "python_version == '3.10' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu130" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu130/torch_sparse-0.6.18+pt29cu130-cp311-cp311-linux_x86_64.whl", marker = "python_version == '3.11' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu130" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu130/torch_sparse-0.6.18+pt29cu130-cp312-cp312-linux_x86_64.whl", marker = "python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu130" },
+]
+torch-cluster = [
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cpu/torch_cluster-1.6.3+pt29cpu-cp310-cp310-linux_x86_64.whl", marker = "python_version == '3.10' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cpu" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cpu/torch_cluster-1.6.3+pt29cpu-cp311-cp311-linux_x86_64.whl", marker = "python_version == '3.11' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cpu" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cpu/torch_cluster-1.6.3+pt29cpu-cp312-cp312-linux_x86_64.whl", marker = "python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cpu" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu126/torch_cluster-1.6.3+pt29cu126-cp310-cp310-linux_x86_64.whl", marker = "python_version == '3.10' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu126" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu126/torch_cluster-1.6.3+pt29cu126-cp311-cp311-linux_x86_64.whl", marker = "python_version == '3.11' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu126" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu126/torch_cluster-1.6.3+pt29cu126-cp312-cp312-linux_x86_64.whl", marker = "python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu126" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu128/torch_cluster-1.6.3+pt29cu128-cp310-cp310-linux_x86_64.whl", marker = "python_version == '3.10' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu128" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu128/torch_cluster-1.6.3+pt29cu128-cp311-cp311-linux_x86_64.whl", marker = "python_version == '3.11' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu128" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu128/torch_cluster-1.6.3+pt29cu128-cp312-cp312-linux_x86_64.whl", marker = "python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu128" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu130/torch_cluster-1.6.3+pt29cu130-cp310-cp310-linux_x86_64.whl", marker = "python_version == '3.10' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu130" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu130/torch_cluster-1.6.3+pt29cu130-cp311-cp311-linux_x86_64.whl", marker = "python_version == '3.11' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu130" },
+    { url = "https://data.pyg.org/whl/torch-2.9.0+cu130/torch_cluster-1.6.3+pt29cu130-cp312-cp312-linux_x86_64.whl", marker = "python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'", extra = "pyg-ext-cu130" },
+]
 
 [tool.uv]
 package = false
+conflicts = [
+    [
+        { extra = "torch-cpu" },
+        { extra = "torch-cu126" },
+    ],
+    [
+        { extra = "torch-cpu" },
+        { extra = "torch-cu128" },
+    ],
+    [
+        { extra = "torch-cpu" },
+        { extra = "torch-cu130" },
+    ],
+    [
+        { extra = "torch-cu126" },
+        { extra = "torch-cu128" },
+    ],
+    [
+        { extra = "torch-cu126" },
+        { extra = "torch-cu130" },
+    ],
+    [
+        { extra = "torch-cu128" },
+        { extra = "torch-cu130" },
+    ],
+    [
+        { extra = "pyg-ext-cpu" },
+        { extra = "pyg-ext-cu126" },
+    ],
+    [
+        { extra = "pyg-ext-cpu" },
+        { extra = "pyg-ext-cu128" },
+    ],
+    [
+        { extra = "pyg-ext-cpu" },
+        { extra = "pyg-ext-cu130" },
+    ],
+    [
+        { extra = "pyg-ext-cu126" },
+        { extra = "pyg-ext-cu128" },
+    ],
+    [
+        { extra = "pyg-ext-cu126" },
+        { extra = "pyg-ext-cu130" },
+    ],
+    [
+        { extra = "pyg-ext-cu128" },
+        { extra = "pyg-ext-cu130" },
+    ],
+    [
+        { extra = "torch-cpu" },
+        { extra = "pyg-ext-cu126" },
+    ],
+    [
+        { extra = "torch-cpu" },
+        { extra = "pyg-ext-cu128" },
+    ],
+    [
+        { extra = "torch-cpu" },
+        { extra = "pyg-ext-cu130" },
+    ],
+    [
+        { extra = "torch-cu126" },
+        { extra = "pyg-ext-cpu" },
+    ],
+    [
+        { extra = "torch-cu126" },
+        { extra = "pyg-ext-cu128" },
+    ],
+    [
+        { extra = "torch-cu126" },
+        { extra = "pyg-ext-cu130" },
+    ],
+    [
+        { extra = "torch-cu128" },
+        { extra = "pyg-ext-cpu" },
+    ],
+    [
+        { extra = "torch-cu128" },
+        { extra = "pyg-ext-cu126" },
+    ],
+    [
+        { extra = "torch-cu128" },
+        { extra = "pyg-ext-cu130" },
+    ],
+    [
+        { extra = "torch-cu130" },
+        { extra = "pyg-ext-cpu" },
+    ],
+    [
+        { extra = "torch-cu130" },
+        { extra = "pyg-ext-cu126" },
+    ],
+    [
+        { extra = "torch-cu130" },
+        { extra = "pyg-ext-cu128" },
+    ],
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
 
 [[tool.uv.index]]
 name = "pytorch-cu130"
 url = "https://download.pytorch.org/whl/cu130"
 explicit = true
+
 
 [tool.black]
 line-length = 88
