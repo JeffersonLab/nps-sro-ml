@@ -438,6 +438,9 @@ class BaseObjectCondensationTrainer(BaseTrainer):
             "node_mask": {0: batch_size, 1: graph_size},
         }
 
+        artifacts_dir = self.save_dir / "onnx_artifacts"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+
         torch.onnx.export(
             self.model,
             (x, pos, fea_mask, node_mask),
@@ -447,6 +450,7 @@ class BaseObjectCondensationTrainer(BaseTrainer):
             input_names=["x", "pos", "fea_mask", "node_mask"],
             verify=True,
             report=True,
+            artifacts_dir=str(artifacts_dir),
         )
 
 
