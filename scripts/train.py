@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 
 import collections
+import pathlib
+import sys
 import torch
 import argparse
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "pytorch_src"))
 
 from utils.utils import prepare_device
 from utils.config import ConfigParser
