@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import collections
 import argparse
 import pathlib
 import sys
@@ -19,11 +20,14 @@ from utils.config import ConfigParser
 
 
 def main(cfg: ConfigParser):
-    logger = cfg.get_logger("inference")
+
+    logger = cfg.get_logger('inference')
     dl = cfg.init_obj("data_loader", logger=logger)
     vdl = dl.split_validation()
 
-    model = load_model(cfg.get("model_pth"))
+    model_path = pathlib.Path(cfg.get("model_pth"))
+    logger.info(f"Loading model from {model_path}")
+    model = load_model(model_path)
     device, _ = prepare_device(cfg.get("n_gpu"))
     logger.info("Using device: {}".format(device))
 
@@ -31,9 +35,7 @@ def main(cfg: ConfigParser):
     model.eval()
 
     results = OcInferenceResults()
-    hyperparams = OcInferenceHyperparameters.from_mapping(
-        cfg.get("hyperparameters", {})
-    )
+    hyperparams = OcInferenceHyperparameters.from_mapping(cfg.get("hyperparameters", {}))
 
     event_counter = 0
     with torch.no_grad():
@@ -44,9 +46,7 @@ def main(cfg: ConfigParser):
             pos = data.pos
             batch = getattr(data, "batch", None)
 
-            object_ids = create_unique_object_ids(
-                y, batch, noise_idx=hyperparams.noise_idx
-            )
+            object_ids = create_unique_object_ids(y, batch, noise_idx=hyperparams.noise_idx)
             x_c, beta = model(x, pos, batch=batch)
             beta = beta.squeeze(-1)
 
@@ -90,11 +90,11 @@ def main(cfg: ConfigParser):
 
 def load_model(resume):
     checkpoint = torch.load(str(resume.absolute()), map_location="cpu")
-    state_dict = checkpoint["state_dict"]
+    state_dict = checkpoint['state_dict']
     model, _ = import_attr(
-        checkpoint["arch"],
-        avail_modules=[checkpoint["module"]],
-        **checkpoint["metadata"],
+        checkpoint['arch'],
+        avail_modules=[checkpoint['module']],
+        **checkpoint['metadata'],
     )
 
     model.load_state_dict(state_dict)
@@ -113,13 +113,13 @@ if __name__ == "__main__":
         default="config/inference/geant4.json",
         help="Path to a config file.",
     )
-
-    # CustomArgs = collections.namedtuple('CustomArgs', 'flags type target')
-    # options = [
-    #     CustomArgs(['--lr', '--learning_rate'], type=float, target='optimizer;args;lr'),
-    #     CustomArgs(
-    #         ['--bs', '--batch_size'], type=int, target='data_loader;args;batch_size'
-    #     ),
-    # ]
-    cfg = ConfigParser.from_args(parser, [])
+    CustomArgs = collections.namedtuple('CustomArgs', 'flags type target')
+    options = [
+        CustomArgs(
+            ['-m', '--model'],
+            type=pathlib.Path,
+            target='model_pth',
+        ),
+    ]
+    cfg = ConfigParser.from_args(parser, options)
     main(cfg)
