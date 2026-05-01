@@ -4,6 +4,7 @@ import collections
 import argparse
 import pathlib
 import sys
+
 import torch
 from tqdm import tqdm
 
@@ -13,13 +14,12 @@ from inference.oc_inference import (
     OcInferenceHyperparameters,
     build_oc_inferencer,
 )
-from utils.utils import prepare_device, import_attr
 from utils.config import ConfigParser
+from utils.utils import import_attr, prepare_device
 
 
 def main(cfg: ConfigParser):
-
-    logger = cfg.get_logger('inference')
+    logger = cfg.get_logger("inference")
     dl = cfg.init_obj("data_loader", logger=logger)
     vdl = dl.split_validation()
 
@@ -27,7 +27,7 @@ def main(cfg: ConfigParser):
     logger.info(f"Loading model from {model_path}")
     model = load_model(model_path)
     device, _ = prepare_device(cfg.get("n_gpu"))
-    logger.info("Using device: {}".format(device))
+    logger.info(f"Using device: {device}")
 
     model = model.to(device)
     model.eval()
@@ -40,22 +40,21 @@ def main(cfg: ConfigParser):
     )
     results = inferencer.infer_dataloader(tqdm(vdl))
 
-    df = results.to_dataframe()
-
     out_dir = cfg.get("out_dir")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    df.to_csv(out_dir / "results.csv", index=False)
-    logger.info(f"Saved inference results to {out_dir / 'results.csv'}")
+    results_path = out_dir / "results.csv"
+    results.to_dataframe().to_csv(results_path, index=False)
+    logger.info(f"Saved inference results to {results_path}")
 
 
 def load_model(resume):
     checkpoint = torch.load(str(resume.absolute()), map_location="cpu")
-    state_dict = checkpoint['state_dict']
+    state_dict = checkpoint["state_dict"]
     model, _ = import_attr(
-        checkpoint['arch'],
-        avail_modules=[checkpoint['module']],
-        **checkpoint['metadata'],
+        checkpoint["arch"],
+        avail_modules=[checkpoint["module"]],
+        **checkpoint["metadata"],
     )
 
     model.load_state_dict(state_dict)
@@ -63,7 +62,6 @@ def load_model(resume):
 
 
 if __name__ == "__main__":
-
     parser = argparse.ArgumentParser(
         description="Inference script for OC model on NPS data"
     )
@@ -74,17 +72,17 @@ if __name__ == "__main__":
         default="config/inference/geant4.json",
         help="Path to a config file.",
     )
-    CustomArgs = collections.namedtuple('CustomArgs', 'flags type target')
+    CustomArgs = collections.namedtuple("CustomArgs", "flags type target")
     options = [
         CustomArgs(
-            ['-m', '--model'],
+            ["-m", "--model"],
             type=pathlib.Path,
-            target='model_pth',
+            target="model_pth",
         ),
         CustomArgs(
-            ['-o', '--out_dir'],
+            ["-o", "--out_dir"],
             type=pathlib.Path,
-            target='out_dir',
+            target="out_dir",
         ),
     ]
     cfg = ConfigParser.from_args(parser, options)
