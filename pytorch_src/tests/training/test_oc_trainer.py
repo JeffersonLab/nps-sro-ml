@@ -2,6 +2,7 @@ import torch
 from torch import nn
 
 from models.oc_base import ObjectCondensationBaseModel
+from training.oc_multi_pulse_trainer import MultiPulseOCTrainer
 from training.oc_trainer import (
     WaveformOCTrainer,
     create_sample_mask,
@@ -18,12 +19,14 @@ class DummyModel(ObjectCondensationBaseModel):
 
 
 class DummyData:
-    def __init__(self, x, pos, y, batch=None):
+    def __init__(self, x, pos, y, batch=None, edge_index=None):
         self.x = x
         self.pos = pos
         self.y = y
         if batch is not None:
             self.batch = batch
+        if edge_index is not None:
+            self.edge_index = edge_index
 
     def to(self, device):
         self.x = self.x.to(device)
@@ -31,7 +34,63 @@ class DummyData:
         self.y = self.y.to(device)
         if hasattr(self, "batch"):
             self.batch = self.batch.to(device)
+        if hasattr(self, "edge_index"):
+            self.edge_index = self.edge_index.to(device)
         return self
+
+
+class DummyMultiPulseModel(ObjectCondensationBaseModel):
+    def __init__(self, input_type="waveform", num_pulse_tokens=2):
+        super().__init__(input_type=input_type)
+        self.weight = nn.Parameter(torch.tensor(1.0))
+        self.num_pulse_tokens = num_pulse_tokens
+
+    def forward(self, x, pos, fea_mask, node_mask):
+        batch_size, num_nodes = node_mask.shape
+        x_c = torch.zeros(batch_size, num_nodes, 2, device=x.device)
+        beta = torch.zeros(batch_size, num_nodes, 1, device=x.device)
+        return x_c, beta
+
+    def propose_pulses(self, x, pos, fea_mask, node_mask):
+        batch_size, num_nodes = node_mask.shape
+        token_shape = (batch_size, num_nodes, self.num_pulse_tokens)
+        embed = self.weight * torch.ones(
+            batch_size, num_nodes, self.num_pulse_tokens, 4, device=x.device
+        )
+        return {
+            "pulse_embedding": embed,
+            "pulse_score": torch.sigmoid(self.weight) * torch.ones(token_shape, device=x.device),
+            "pulse_time": 0.5 * torch.ones(token_shape, device=x.device),
+            "pulse_width": torch.ones(token_shape, device=x.device),
+            "pulse_amplitude": torch.ones(token_shape, device=x.device),
+            "token_mask": node_mask.unsqueeze(-1).expand_as(
+                torch.ones(token_shape, dtype=torch.bool, device=x.device)
+            ),
+            "pos": pos,
+            "base_token_time": 0.5 * torch.ones(token_shape, device=x.device),
+        }
+
+    def cluster_pulses(self, proposal, prune_mask=None, soft_pruning=True):
+        token_mask = proposal["token_mask"]
+        batch_size, num_nodes, num_tokens = token_mask.shape
+        gate = token_mask.to(dtype=proposal["pulse_score"].dtype)
+        return {
+            "cluster_seedness_beta": torch.sigmoid(self.weight)
+            * torch.ones(batch_size, num_nodes, num_tokens, device=gate.device),
+            "latent_cluster_coordinate_z": self.weight
+            * torch.ones(batch_size, num_nodes, num_tokens, 2, device=gate.device),
+            "refined_pulse_score": torch.sigmoid(self.weight)
+            * torch.ones(batch_size, num_nodes, num_tokens, device=gate.device),
+            "refined_time": 0.5 * torch.ones(batch_size, num_nodes, num_tokens, device=gate.device),
+            "refined_charge": torch.ones(batch_size, num_nodes, num_tokens, device=gate.device),
+            "cluster_token_mask": token_mask,
+            "cluster_token_gate": gate,
+        }
+
+    def _pool_legacy_outputs(self, cluster_outputs, node_mask):
+        x_c = cluster_outputs["latent_cluster_coordinate_z"].mean(dim=2)
+        beta = cluster_outputs["cluster_seedness_beta"].amax(dim=2, keepdim=True)
+        return x_c, beta
 
 
 def build_waveform_trainer(tmp_path, dataloader, **extra_config):
@@ -44,6 +103,27 @@ def build_waveform_trainer(tmp_path, dataloader, **extra_config):
         **extra_config,
     }
     return WaveformOCTrainer(
+        model=model,
+        optimizer=optimizer,
+        config=config,
+        device=torch.device("cpu"),
+        dataloader=dataloader,
+        valid_dataloader=None,
+        lr_scheduler=None,
+        logger=None,
+    )
+
+
+def build_multi_pulse_trainer(tmp_path, dataloader, **extra_config):
+    model = DummyMultiPulseModel(input_type="waveform", num_pulse_tokens=2)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+    config = {
+        "epochs": 1,
+        "save_dir": str(tmp_path / "saved"),
+        "log_dir": str(tmp_path / "logs"),
+        **extra_config,
+    }
+    return MultiPulseOCTrainer(
         model=model,
         optimizer=optimizer,
         config=config,
@@ -128,3 +208,23 @@ def test_export_onnx_uses_preprocessed_features_and_missing_batch_defaults(tmp_p
     assert captured["pos"].shape == (1, 2, 2)
     assert torch.equal(captured["node_mask"], torch.tensor([[True, True]]))
     assert torch.equal(captured["fea_mask"], torch.tensor([[[True, True], [True, True]]]))
+
+
+def test_multi_pulse_trainer_computes_loss_dict(tmp_path):
+    x = torch.tensor([[1.0, 2.0], [0.0, 0.0]], dtype=torch.float32)
+    pos = torch.tensor([[0.0, 0.0], [1.0, 0.0]], dtype=torch.float32)
+    y = torch.tensor([[3.0, -1.0], [-1.0, -1.0]], dtype=torch.float32)
+    data = DummyData(x=x, pos=pos, y=y)
+
+    trainer = build_multi_pulse_trainer(
+        tmp_path,
+        dataloader=[data],
+        noise_idx=-1,
+    )
+
+    outputs = trainer._forward_losses(data)
+
+    assert outputs["loss"].ndim == 0
+    assert outputs["proposal_score_loss"].ndim == 0
+    assert outputs["refined_score_loss"].ndim == 0
+    assert outputs["beta"].shape == (2,)

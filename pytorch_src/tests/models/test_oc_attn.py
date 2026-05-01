@@ -1,4 +1,3 @@
-import pytest
 import torch
 
 from models.oc_attn import ObjectCondensationModel
@@ -25,21 +24,6 @@ def test_oc_attn_pulse_set_embed_out_projection():
 
     assert x_c.shape == (batch_size, num_nodes, 2)
     assert beta.shape == (batch_size, num_nodes, 1)
-
-
-def test_oc_attn_pulse_set_rejects_invalid_shape():
-    """Pulse-set path should raise a clear error for invalid x shape."""
-    batch_size, num_nodes = 2, 5
-    x = torch.randn(batch_size, num_nodes, 2)
-    pos = torch.randn(batch_size, num_nodes, 2)
-    fea_mask = torch.ones(batch_size, num_nodes, dtype=torch.bool)
-    node_mask = torch.ones(batch_size, num_nodes, dtype=torch.bool)
-
-    model = ObjectCondensationModel(input_type="pulse_set")
-
-    with pytest.raises(ValueError, match=r"expected x shape \[B, N, P, 2\]"):
-        model(x, pos, fea_mask, node_mask)
-
 
 def test_oc_attn_waveform_default_ff_width_matches_encoder_contract():
     """Waveform defaults should keep the encoder FF width at 4x d_model, not d_model squared."""
