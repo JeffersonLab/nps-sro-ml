@@ -34,57 +34,63 @@ def pairwise_cluster_confusion_matrix(
 ) -> np.ndarray:
     pair_confusion = np.zeros((2, 2), dtype=np.int64)
 
-    for event_id in np.unique(event_ids):
-        event_mask = event_ids == event_id
-        obj_ids = object_ids[event_mask]
-        clus_ids = cluster_ids[event_mask]
-        pos_x = det_x[event_mask]
-        pos_y = det_y[event_mask]
+    event_blocks = _group_labels_by_block(
+        event_ids,
+        det_x,
+        det_y,
+        object_ids,
+        cluster_ids,
+    )
 
-        unique_pos, inverse = np.unique(
-            np.stack([pos_x, pos_y], axis=1),
-            axis=0,
-            return_inverse=True,
-        )
-
-        block_obj_ids = np.full(unique_pos.shape[0], fill_value=-1, dtype=obj_ids.dtype)
-        block_clus_ids = np.full(unique_pos.shape[0], fill_value=-1, dtype=clus_ids.dtype)
-
-        for block_idx in range(unique_pos.shape[0]):
-            block_mask = inverse == block_idx
-            block_obj = np.unique(obj_ids[block_mask])
-            block_clus = np.unique(clus_ids[block_mask])
-
-            if block_obj.size > 1:
-                raise ValueError(
-                    "Inconsistent object IDs found for the same event/block position."
-                )
-            if block_clus.size > 1:
-                raise ValueError(
-                    "Inconsistent cluster IDs found for the same event/block position."
-                )
-
-            block_obj_ids[block_idx] = block_obj[0]
-            block_clus_ids[block_idx] = block_clus[0]
-
-        obj_ids = block_obj_ids
-        clus_ids = block_clus_ids
-        if obj_ids.size < 2:
+    for block_map in event_blocks.values():
+        block_labels = list(block_map.values())
+        if len(block_labels) < 2:
             continue
 
-        # Position-aware and permutation-invariant: compare detector blocks, not row order.
-        true_same = (obj_ids[:, None] == obj_ids[None, :]) & (obj_ids[:, None] >= 0)
-        pred_same = (clus_ids[:, None] == clus_ids[None, :]) & (clus_ids[:, None] >= 0)
-        upper = np.triu_indices(obj_ids.size, k=1)
-        true_same = true_same[upper]
-        pred_same = pred_same[upper]
+        for left_idx in range(len(block_labels) - 1):
+            left_true = block_labels[left_idx]["true"]
+            left_pred = block_labels[left_idx]["pred"]
+            for right_idx in range(left_idx + 1, len(block_labels)):
+                right_true = block_labels[right_idx]["true"]
+                right_pred = block_labels[right_idx]["pred"]
 
-        pair_confusion[0, 0] += np.sum(~true_same & ~pred_same)
-        pair_confusion[0, 1] += np.sum(~true_same & pred_same)
-        pair_confusion[1, 0] += np.sum(true_same & ~pred_same)
-        pair_confusion[1, 1] += np.sum(true_same & pred_same)
+                # Position-aware and permutation-invariant: compare detector blocks and
+                # treat them as matching when they share at least one object/cluster ID.
+                true_same = bool(left_true.intersection(right_true))
+                pred_same = bool(left_pred.intersection(right_pred))
+
+                pair_confusion[int(true_same), int(pred_same)] += 1
 
     return pair_confusion
+
+
+def _group_labels_by_block(
+    event_ids: np.ndarray,
+    det_x: np.ndarray,
+    det_y: np.ndarray,
+    object_ids: np.ndarray,
+    cluster_ids: np.ndarray,
+) -> dict[int, dict[tuple[float, float], dict[str, set[int]]]]:
+    events: dict[int, dict[tuple[float, float], dict[str, set[int]]]] = {}
+
+    for event_id, x_pos, y_pos, object_id, cluster_id in zip(
+        event_ids,
+        det_x,
+        det_y,
+        object_ids,
+        cluster_ids,
+    ):
+        event_key = int(event_id)
+        block_key = (float(x_pos), float(y_pos))
+        block_map = events.setdefault(event_key, {})
+        label_sets = block_map.setdefault(block_key, {"true": set(), "pred": set()})
+
+        if object_id >= 0:
+            label_sets["true"].add(int(object_id))
+        if cluster_id >= 0:
+            label_sets["pred"].add(int(cluster_id))
+
+    return events
 
 
 def accuracy_from_confusion(confusion: np.ndarray) -> float:
