@@ -3,6 +3,8 @@ import json
 import pathlib
 import logging
 import importlib
+from collections.abc import Mapping
+import numpy as np
 from collections import OrderedDict
 from typing import Optional, List, Any, Tuple
 from collections import OrderedDict
@@ -68,11 +70,39 @@ def write_json(content: dict, fname: str | pathlib.Path):
     fname : str | pathlib.Path
         Path to the JSON file.
     """
+
     fname = pathlib.Path(fname)
     with fname.open("wt") as handle:
-        json.dump(content, handle, indent=4, sort_keys=False)
+        json.dump(jsonify(content), handle, indent=4, sort_keys=False)
 
 
+def jsonify(obj: Any) -> Any:
+    """Convert common Python and NumPy objects into JSON-serializable values.
+
+    Parameters
+    ----------
+    obj
+        Object to convert.
+
+    Returns
+    -------
+    Any
+        JSON-serializable representation of ``obj``.
+    """
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, np.generic):
+        return obj.item()
+    if isinstance(obj, pathlib.Path):
+        return str(obj)
+    if isinstance(obj, Mapping):
+        return {str(key): jsonify(value) for key, value in obj.items()}
+    if isinstance(obj, list):
+        return [jsonify(item) for item in obj]
+    if isinstance(obj, tuple):
+        return [jsonify(item) for item in obj]
+    return obj
+    
 def import_attr(
     attr_name: str | None, avail_modules: List[str] | str, *args, **kwargs
 ) -> Tuple[Any, str]:
