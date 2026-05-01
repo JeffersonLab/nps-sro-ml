@@ -31,6 +31,7 @@ def pairwise_cluster_confusion_matrix(
     det_y: np.ndarray,
     object_ids: np.ndarray,
     cluster_ids: np.ndarray,
+    overlap_tolerant: bool = False,
 ) -> np.ndarray:
     pair_confusion = np.zeros((2, 2), dtype=np.int64)
 
@@ -58,6 +59,16 @@ def pairwise_cluster_confusion_matrix(
                 # treat them as matching when they share at least one object/cluster ID.
                 true_same = bool(left_true.intersection(right_true))
                 pred_same = bool(left_pred.intersection(right_pred))
+
+                if overlap_tolerant:
+                    left_ambiguous = len(left_true) > 1
+                    right_ambiguous = len(right_true) > 1
+                    ambiguous_pair = left_ambiguous or right_ambiguous
+
+                    # For single-assignment methods, do not penalize ambiguous overlap
+                    # blocks when they would otherwise induce unavoidable FP/FN pairs.
+                    if ambiguous_pair and true_same != pred_same:
+                        continue
 
                 pair_confusion[int(true_same), int(pred_same)] += 1
 
@@ -123,6 +134,7 @@ def summarize_clustering_metrics(
     cluster_ids: np.ndarray,
     background_confusion: np.ndarray | None = None,
     pair_confusion: np.ndarray | None = None,
+    pair_confusion_overlap_tolerant: np.ndarray | None = None,
 ) -> dict[str, Any]:
     background_confusion = (
         background_confusion
@@ -138,6 +150,19 @@ def summarize_clustering_metrics(
             det_y,
             object_ids,
             cluster_ids,
+            overlap_tolerant=False,
+        )
+    )
+    pair_confusion_overlap_tolerant = (
+        pair_confusion_overlap_tolerant
+        if pair_confusion_overlap_tolerant is not None
+        else pairwise_cluster_confusion_matrix(
+            event_ids,
+            det_x,
+            det_y,
+            object_ids,
+            cluster_ids,
+            overlap_tolerant=True,
         )
     )
 
@@ -152,6 +177,18 @@ def summarize_clustering_metrics(
         "pairwise_precision": precision_from_confusion(pair_confusion),
         "pairwise_recall": recall_from_confusion(pair_confusion),
         "pairwise_f1": f1_from_confusion(pair_confusion),
+        "pairwise_overlap_tolerant_accuracy": accuracy_from_confusion(
+            pair_confusion_overlap_tolerant
+        ),
+        "pairwise_overlap_tolerant_precision": precision_from_confusion(
+            pair_confusion_overlap_tolerant
+        ),
+        "pairwise_overlap_tolerant_recall": recall_from_confusion(
+            pair_confusion_overlap_tolerant
+        ),
+        "pairwise_overlap_tolerant_f1": f1_from_confusion(
+            pair_confusion_overlap_tolerant
+        ),
     }
 
 
@@ -169,6 +206,15 @@ def compute_clustering_metrics(
         det_y,
         object_ids,
         cluster_ids,
+        overlap_tolerant=False,
+    )
+    pair_confusion_overlap_tolerant = pairwise_cluster_confusion_matrix(
+        event_ids,
+        det_x,
+        det_y,
+        object_ids,
+        cluster_ids,
+        overlap_tolerant=True,
     )
     summary = summarize_clustering_metrics(
         event_ids,
@@ -178,12 +224,14 @@ def compute_clustering_metrics(
         cluster_ids,
         background_confusion=background_confusion,
         pair_confusion=pair_confusion,
+        pair_confusion_overlap_tolerant=pair_confusion_overlap_tolerant,
     )
 
     return {
         "summary": summary,
         "background_confusion": background_confusion,
         "pair_confusion": pair_confusion,
+        "pair_confusion_overlap_tolerant": pair_confusion_overlap_tolerant,
     }
 
 

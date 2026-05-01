@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import json
 import pathlib
 import sys
 from typing import Iterable
@@ -70,17 +71,11 @@ def report(
 
     df_clus = results[results["cluster_ids"] >= 0]
     if not df_clus.empty:
-        sampled_events = _sample_events(results["event_id"].unique(), num_events, seed)
-        df_clus_sampled = df_clus[df_clus["event_id"].isin(sampled_events)]
-        if not df_clus_sampled.empty:
-            cluster_sizes = (
-                df_clus_sampled.groupby(["event_id", "cluster_ids"]).size().to_numpy()
-            )
-            _plot_cluster_size_distribution(
-                cluster_sizes,
-                plot_dir / "cluster_size_distribution.png",
-                sampled_events=sampled_events,
-            )
+        cluster_sizes = df_clus.groupby(["event_id", "cluster_ids"]).size().to_numpy()
+        _plot_cluster_size_distribution(
+            cluster_sizes,
+            plot_dir / "cluster_size_distribution.png",
+        )
 
     metrics = compute_clustering_metrics(
         event_ids=results["event_id"].to_numpy(),
@@ -89,17 +84,7 @@ def report(
         object_ids=results["object_ids"].to_numpy(),
         cluster_ids=results["cluster_ids"].to_numpy(),
     )
-    pd.DataFrame([metrics["summary"]]).to_csv(metric_dir / "summary.csv", index=False)
-    pd.DataFrame(
-        metrics["background_confusion"],
-        index=["true_background", "true_signal"],
-        columns=["pred_background", "pred_signal"],
-    ).to_csv(metric_dir / "background_confusion_matrix.csv")
-    pd.DataFrame(
-        metrics["pair_confusion"],
-        index=["true_different", "true_same"],
-        columns=["pred_different", "pred_same"],
-    ).to_csv(metric_dir / "pair_confusion_matrix.csv")
+    _write_metrics_json(metrics, metric_dir / "metrics.json")
 
     _plot_confusion_matrix(
         matrix=metrics["background_confusion"],
@@ -112,8 +97,15 @@ def report(
         matrix=metrics["pair_confusion"],
         row_labels=["true different", "true same"],
         col_labels=["pred different", "pred same"],
-        title="Permutation-Invariant Cluster Recognition",
+        title="Permutation-Invariant Cluster Recognition (Strict)",
         pth=plot_dir / "pair_confusion_matrix.png",
+    )
+    _plot_confusion_matrix(
+        matrix=metrics["pair_confusion_overlap_tolerant"],
+        row_labels=["true different", "true same"],
+        col_labels=["pred different", "pred same"],
+        title="Permutation-Invariant Cluster Recognition (Overlap Tolerant)",
+        pth=plot_dir / "pair_confusion_overlap_tolerant_matrix.png",
     )
 def _sample_events(
     event_ids: Iterable[int] | np.ndarray,
@@ -130,6 +122,39 @@ def _sample_events(
     rng = np.random.default_rng(seed)
     sampled = rng.choice(event_ids, size=num_events, replace=False)
     return np.sort(sampled)
+
+
+def _write_metrics_json(metrics: dict, pth: pathlib.Path) -> None:
+    background_percent = _confusion_percentages(metrics["background_confusion"])
+    pair_percent = _confusion_percentages(metrics["pair_confusion"])
+    pair_overlap_tolerant_percent = _confusion_percentages(
+        metrics["pair_confusion_overlap_tolerant"]
+    )
+    serializable = {
+        "summary": metrics["summary"],
+        "background_confusion": {
+            "counts": metrics["background_confusion"].tolist(),
+            "percentages": background_percent.tolist(),
+        },
+        "pair_confusion": {
+            "counts": metrics["pair_confusion"].tolist(),
+            "percentages": pair_percent.tolist(),
+        },
+        "pair_confusion_overlap_tolerant": {
+            "counts": metrics["pair_confusion_overlap_tolerant"].tolist(),
+            "percentages": pair_overlap_tolerant_percent.tolist(),
+        },
+    }
+    pth.write_text(json.dumps(serializable, indent=2) + "\n")
+
+
+def _confusion_percentages(matrix: np.ndarray) -> np.ndarray:
+    total = matrix.sum()
+    if total == 0:
+        return np.zeros_like(matrix, dtype=float)
+    return matrix.astype(float) * 100.0 / total
+
+
 def _plot_confusion_matrix(
     matrix: np.ndarray,
     row_labels: list[str],
@@ -137,6 +162,7 @@ def _plot_confusion_matrix(
     title: str,
     pth: pathlib.Path,
 ) -> None:
+    percentages = _confusion_percentages(matrix)
     fig, ax = plt.subplots(1, 1, figsize=(5, 4), constrained_layout=True, dpi=300)
     im = ax.imshow(matrix, cmap="Blues")
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
@@ -146,7 +172,14 @@ def _plot_confusion_matrix(
 
     for i in range(matrix.shape[0]):
         for j in range(matrix.shape[1]):
-            ax.text(j, i, int(matrix[i, j]), ha="center", va="center", color="black")
+            ax.text(
+                j,
+                i,
+                f"{int(matrix[i, j])}\n{percentages[i, j]:.1f}%",
+                ha="center",
+                va="center",
+                color="black",
+            )
 
     fig.savefig(pth)
     plt.close(fig)
@@ -187,7 +220,6 @@ def _plot_min_distance_distribution(min_d_arr: np.ndarray, pth: pathlib.Path) ->
 def _plot_cluster_size_distribution(
     cluster_size_arr: np.ndarray,
     pth: pathlib.Path,
-    sampled_events: np.ndarray,
 ) -> None:
     fig, ax = plt.subplots(1, 1, figsize=(6, 3.5), constrained_layout=True, dpi=300)
     ax.hist(
@@ -200,10 +232,6 @@ def _plot_cluster_size_distribution(
     )
     ax.set_xlabel(r"$\mathrm{Cluster} \ \mathrm{Size}$", fontsize=14)
     ax.set_ylabel(r"$\mathrm{Counts}$", fontsize=14)
-    ax.set_title(
-        f"Sampled events: {', '.join(str(int(event_id)) for event_id in sampled_events)}",
-        fontsize=10,
-    )
     fig.savefig(pth)
     plt.close(fig)
 
