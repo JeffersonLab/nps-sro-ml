@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from base.model import BaseModel
+from models.oc_base import ObjectCondensationBaseModel
 from models.encoders import PulseSetEncoder, WaveformEncoder
 
 
@@ -191,7 +191,7 @@ class LatentCrossBlock(nn.Module):
         return nodes * node_mask_f
 
 
-class BalancedObjectCondensationModel(BaseModel):
+class BalancedObjectCondensationModel(ObjectCondensationBaseModel):
     """
     Balanced OC model for high-level calorimeter features.
 
@@ -208,10 +208,9 @@ class BalancedObjectCondensationModel(BaseModel):
     """
 
     def __init__(self, **kwargs):
-        super().__init__()
+        super().__init__(**kwargs)
 
         self.pos_dim = kwargs.get('pos_dim', 2)
-        self.input_type = kwargs.get('input_type', 'pulse_set')
         self.grid_rows = kwargs.get('grid_rows', 36)
         self.grid_cols = kwargs.get('grid_cols', 30)
 

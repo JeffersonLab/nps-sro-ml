@@ -1,4 +1,4 @@
-from inference.oc_inference import (
+from .oc_inference import (
     BaseObjectCondensationInferencer,
     OcInferenceHyperparameters,
     OcInferenceResults,

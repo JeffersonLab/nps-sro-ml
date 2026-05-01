@@ -1,1 +1,1 @@
-__all__ = ["base", "datasets", "layers", "models", "training", "utils"]
+__all__ = ["base", "datasets", "inference", "layers", "models", "training", "utils"]

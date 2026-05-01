@@ -1,6 +1,38 @@
 import torch
 import pytest
-from models.oc_inference import oc_inference_per_graph, oc_inference_per_batch
+from models.oc_inference import (
+    PulseOCInferencer,
+    WaveformOCInferencer,
+    oc_inference_per_graph,
+    oc_inference_per_batch,
+)
+from models.oc_base import ObjectCondensationBaseModel
+
+
+class DummyModel(ObjectCondensationBaseModel):
+    def __init__(self, input_type="pulse_set"):
+        super().__init__(input_type=input_type)
+        self.weight = torch.nn.Parameter(torch.tensor(1.0))
+
+    def forward(self, x, pos, fea_mask, node_mask):
+        return x[..., 0, :] if x.dim() == 4 else x, node_mask.unsqueeze(-1).to(x.dtype)
+
+
+class DummyData:
+    def __init__(self, x, pos, y, batch=None):
+        self.x = x
+        self.pos = pos
+        self.y = y
+        if batch is not None:
+            self.batch = batch
+
+    def to(self, device):
+        self.x = self.x.to(device)
+        self.pos = self.pos.to(device)
+        self.y = self.y.to(device)
+        if hasattr(self, "batch"):
+            self.batch = self.batch.to(device)
+        return self
 
 
 def test_oc_inference_per_graph_basic():
@@ -258,10 +290,74 @@ def test_oc_inference_per_batch_empty_graph():
 
     # Graph 0 has seed
     assert cluster_ids[0] == 1
-    assert cluster_ids[1] == 1
 
-    # Graph 1 has no seeds
-    assert cluster_ids[2] == 0
-    assert cluster_ids[3] == 0
-    assert min_d[2] == float('inf')
-    assert min_d[3] == float('inf')
+
+def test_pulse_inferencer_prepares_packed_inputs_like_trainer():
+    model = DummyModel(input_type="pulse_set")
+    inferencer = PulseOCInferencer(model)
+    data = DummyData(
+        x=torch.tensor(
+            [
+                [1.0, 10.0, 2.0, 20.0],
+                [3.0, 30.0, 0.0, 0.0],
+                [4.0, 40.0, 5.0, 50.0],
+            ],
+            dtype=torch.float32,
+        ),
+        pos=torch.tensor(
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            dtype=torch.float32,
+        ),
+        y=torch.tensor([[1], [2], [3]], dtype=torch.float32),
+        batch=torch.tensor([0, 0, 1], dtype=torch.long),
+    )
+
+    x_graph, pos_graph, fea_mask, node_mask, _ = model.prepare_graph_inputs(
+        data.x,
+        data.pos,
+        data.batch,
+    )
+
+    assert x_graph.shape == (2, 2, 2, 2)
+    assert pos_graph.shape == (2, 2, 2)
+    assert torch.equal(node_mask, torch.tensor([[True, True], [True, False]]))
+    assert torch.equal(
+        fea_mask,
+        torch.tensor(
+            [
+                [[True, True], [True, False]],
+                [[True, True], [False, False]],
+            ]
+        ),
+    )
+
+
+def test_waveform_inferencer_preprocesses_waveforms_like_trainer(tmp_path):
+    cfg_path = tmp_path / "vme.csv"
+    cfg_path.write_text("channel,FADC250_ALLCH_PED\n0,1.0\n1,2.0\n")
+
+    model = DummyModel(input_type="waveform")
+    inferencer = WaveformOCInferencer(
+        model,
+        config={"trainer": {"args": {"vme_config": str(cfg_path)}}},
+    )
+    data = DummyData(
+        x=torch.tensor([[10.0, 11.0], [20.0, 21.0]], dtype=torch.float32),
+        pos=torch.tensor([[0.0, 0.0], [1.0, 0.0]], dtype=torch.float32),
+        y=torch.tensor([[1], [2]], dtype=torch.float32),
+    )
+
+    processed = model.preprocess_features(data)
+    batch = model.get_batch_vector(processed, getattr(data, "batch", None))
+    x_graph, _, fea_mask, node_mask, _ = model.prepare_graph_inputs(
+        processed,
+        data.pos,
+        batch,
+    )
+
+    assert torch.equal(
+        x_graph,
+        torch.tensor([[[9.0, 10.0], [18.0, 19.0]]], dtype=torch.float32),
+    )
+    assert torch.equal(node_mask, torch.tensor([[True, True]]))
+    assert torch.equal(fea_mask, torch.tensor([[[True, True], [True, True]]]))

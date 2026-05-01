@@ -1,15 +1,16 @@
 import torch
 from torch import nn
 
+from models.oc_base import ObjectCondensationBaseModel
 from training.oc_trainer import (
     WaveformOCTrainer,
     create_sample_mask,
 )
 
 
-class DummyModel(nn.Module):
-    def __init__(self):
-        super().__init__()
+class DummyModel(ObjectCondensationBaseModel):
+    def __init__(self, input_type="waveform"):
+        super().__init__(input_type=input_type)
         self.weight = nn.Parameter(torch.tensor(1.0))
 
     def forward(self, x, pos, fea_mask, node_mask):
@@ -34,7 +35,7 @@ class DummyData:
 
 
 def build_waveform_trainer(tmp_path, dataloader, **extra_config):
-    model = DummyModel()
+    model = DummyModel(input_type="waveform")
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
     config = {
         "epochs": 1,
@@ -73,22 +74,22 @@ def test_waveform_trainer_accepts_legacy_config_keys(tmp_path):
         vme_config=str(cfg_path),
     )
 
-    assert "FADC250_ALLCH_PED" in trainer.vme_config
+    assert "FADC250_ALLCH_PED" in trainer.model.vme_config
     assert torch.equal(
-        trainer.vme_config["FADC250_ALLCH_PED"],
+        trainer.model.vme_config["FADC250_ALLCH_PED"],
         torch.tensor([1.5, 2.5], dtype=torch.float32),
     )
 
 
 def test_waveform_preprocess_checks_channel_indices(tmp_path):
     trainer = build_waveform_trainer(tmp_path, dataloader=[])
-    trainer.vme_config = {"FADC250_ALLCH_PED": torch.tensor([0.5, 1.5])}
+    trainer.model.vme_config = {"FADC250_ALLCH_PED": torch.tensor([0.5, 1.5])}
 
     wf = torch.ones(1, 4)
     channels = torch.tensor([2])
 
     try:
-        trainer._preprocess_wf(wf, channels)
+        trainer.model._preprocess_wf(wf, channels)
     except ValueError as exc:
         assert "Waveform channels must be in" in str(exc)
     else:

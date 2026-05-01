@@ -9,13 +9,11 @@ from tqdm import tqdm
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "pytorch_src"))
 
-from utils.utils import prepare_device, import_attr
-from models.oc_inference import (
+from inference.oc_inference import (
     OcInferenceHyperparameters,
-    OcInferenceResults,
-    oc_inference_per_graph,
+    build_oc_inferencer,
 )
-from utils.graph import create_unique_object_ids
+from utils.utils import prepare_device, import_attr
 from utils.config import ConfigParser
 
 
@@ -34,50 +32,13 @@ def main(cfg: ConfigParser):
     model = model.to(device)
     model.eval()
 
-    results = OcInferenceResults()
     hyperparams = OcInferenceHyperparameters.from_mapping(cfg.get("hyperparameters", {}))
-
-    event_counter = 0
-    with torch.no_grad():
-        for data in tqdm(vdl):
-            data = data.to(device)
-            x = data.x
-            y = data.y.squeeze(-1).long()
-            pos = data.pos
-            batch = getattr(data, "batch", None)
-
-            object_ids = create_unique_object_ids(y, batch, noise_idx=hyperparams.noise_idx)
-            x_c, beta = model(x, pos, batch=batch)
-            beta = beta.squeeze(-1)
-
-            if batch is None:
-                batch = torch.zeros(x_c.size(0), dtype=torch.long, device=device)
-
-            for b in batch.unique(sorted=True):
-                b_mask = batch == b
-
-                x_c_b = x_c[b_mask]
-                beta_b = beta[b_mask]
-                pos_b = pos[b_mask]
-
-                cluster_ids, min_d = oc_inference_per_graph(
-                    x_c_b,
-                    beta_b,
-                    beta_thres=hyperparams.beta_thres,
-                    dist_thres=hyperparams.dist_thres,
-                    bkg_idx=hyperparams.noise_idx,
-                )
-
-                results.append_graph(
-                    event_id=event_counter,
-                    cluster_ids=cluster_ids,
-                    min_d=min_d,
-                    beta=beta_b,
-                    x_c=x_c_b,
-                    object_ids=object_ids[b_mask],
-                    pos=pos_b,
-                )
-                event_counter += 1
+    inferencer = build_oc_inferencer(
+        model,
+        config=cfg.config,
+        hyperparameters=hyperparams,
+    )
+    results = inferencer.infer_dataloader(tqdm(vdl))
 
     df = results.to_dataframe()
 

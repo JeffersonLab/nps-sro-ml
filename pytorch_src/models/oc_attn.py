@@ -1,26 +1,22 @@
 import torch
 from torch import nn
 
-from base.model import BaseModel
 from layers.attention import FullAttention, AttentionLayer
 from layers.encoders import Encoder, VanillaEncoderLayer
+from models.oc_base import ObjectCondensationBaseModel
 from models.encoders import PulseSetEncoder, WaveformEncoder
 
 
-class ObjectCondensationModel(BaseModel):
+class ObjectCondensationModel(ObjectCondensationBaseModel):
     """
     Base class for Object Condensation models.
     """
 
     def __init__(self, **kwargs):
-        super(ObjectCondensationModel, self).__init__()
+        super(ObjectCondensationModel, self).__init__(**kwargs)
 
         # Model hyperparameters
         self.pos_dim = kwargs.get('pos_dim', 2)  # dim of detector position (x,y)
-
-        self.input_type = kwargs.get(
-            'input_type', 'pulse_set'
-        )  # 'pulse_set' or 'waveform'
 
         # if waveform encoder is used.
         self.wf_enc_d_model = kwargs.get('wf_d_model', 32)

@@ -1,18 +1,15 @@
 import logging
 import torch
 import pathlib
-import pandas as pd
-from typing import Any, Optional, Tuple, Dict
+from typing import Optional, Tuple
 from torch.export import Dim
 
 from base.trainer import BaseTrainer
 from base.model import BaseModel
 from base.dataloader import BaseDataLoader
-from datasets.nps import get_node_index_from_position
 from models.oc_loss import oc_loss_per_batch
 from utils.graph import (
     create_unique_object_ids,
-    pack_to_graph_batches,
     reorder_from_graph_batches,
 )
 
@@ -103,39 +100,7 @@ class BaseObjectCondensationTrainer(BaseTrainer):
         """
         Set additonal attributes needed for training, such as loading scalers or other pre-processing tools.
         """
-        pass
-
-    def _unpack_features(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Unpack features to desired shape. This is a placeholder method that should be implemented by subclasses to handle specific feature formats. For example, if the input features are packed as (E, t) pairs for pulses, this method can reshape them and create a mask for valid pulses.
-
-        Parameters
-        ----------
-        x : torch.Tensor
-            Input features, shape [..., D] where D is the feature dimension.
-
-        Returns
-        -------
-        x_out : torch.Tensor
-        mask : torch.Tensor
-        """
-        return x, torch.ones(x.shape, dtype=torch.bool, device=x.device)
-
-    def _preprocess_features(self, data) -> torch.Tensor:
-        """
-        Pre-process features as needed before feeding into the model. This can include operations like normalization, scaling, or other transformations. By default, it returns the input features unchanged, but subclasses can override this method to implement specific pre-processing steps.
-
-        Parameters
-        ----------
-        data : Any
-            The input data object containing features and possibly other information needed for pre-processing.
-
-        Returns
-        -------
-        torch.Tensor
-            Pre-processed features, shape [..., D'] where D' may be different from D depending on the transformations applied.
-        """
-        return data.x
+        self.model.configure_input_preprocessing(self.config)
 
     def _compute_oc_losses(
         self,
@@ -188,50 +153,6 @@ class BaseObjectCondensationTrainer(BaseTrainer):
         l_noise *= noise_scale
 
         return l_attr, l_repul, l_coward, l_noise
-
-    def _prepare_graph_inputs(
-        self, x: torch.Tensor, pos: torch.Tensor, batch: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Prepare graph inputs by packing features into graph batches and unpacking the feature vector into the desired shape. This is a helper function that can be used in both training and validation steps to ensure the input features are in the correct format for the model.
-
-        Parameters
-        ----------
-        x : torch.Tensor
-            Input features, shape [N, D].
-        pos : torch.Tensor
-            Node positions, shape [N, pos_dim].
-        batch : torch.Tensor
-            Tensor of shape [N] indicating the graph index for each node in a batched setting.
-
-        Return
-        ------
-        Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
-            A tuple containing
-            - x: Packed and unpacked features, shape [G, N_max, ...] where the remaining dimensions depend on the output of _unpack_features.
-            - pos: Packed positions, shape [G, N_max, pos_dim].
-            - fea_mask: Mask for valid features, shape [G, N_max, ...].
-            - node_mask: Mask for valid nodes, shape [G, N_max].
-            - idx_out: Indices to reorder outputs back to original node order, shape [N].
-        """
-        # nodes, D -> G, N_max, D
-        # valid = [G, N_max] (True for valid node, False for padded)
-        x_out, idx_out, node_mask = pack_to_graph_batches(x, [pos], batch=batch)
-        x = x_out[0]  # [G, N_max, D]
-        pos = x_out[1]  # [G, N_max, pos_dim]
-        # [G, N_max, P_max, 2], [G, N_max, P_max]
-        x, fea_mask = self._unpack_features(x)
-        return x, pos, fea_mask, node_mask, idx_out
-
-    def _get_batch_vector(
-        self, x: torch.Tensor, batch: Optional[torch.Tensor]
-    ) -> torch.LongTensor:
-        """
-        Return a valid batch vector. Single-graph inputs are treated as batch 0.
-        """
-        if batch is None:
-            return torch.zeros(x.shape[0], dtype=torch.long, device=x.device)
-        return batch
 
     def _apply_downsampling(
         self,
@@ -292,17 +213,17 @@ class BaseObjectCondensationTrainer(BaseTrainer):
             self.optimizer.zero_grad()
             data = data.to(self.device)
 
-            x = self._preprocess_features(data)
+            x = self.model.preprocess_features(data)
             y = data.y.squeeze(-1).long()
             pos = data.pos
-            batch = self._get_batch_vector(x, getattr(data, "batch", None))
+            batch = self.model.get_batch_vector(x, getattr(data, "batch", None))
             object_ids = create_unique_object_ids(y, batch, noise_idx)
 
             x, pos, batch, object_ids = self._apply_downsampling(
                 x, pos, batch, object_ids
             )
 
-            x, pos, fea_mask, node_mask, idx_out = self._prepare_graph_inputs(
+            x, pos, fea_mask, node_mask, idx_out = self.model.prepare_graph_inputs(
                 x, pos, batch
             )
 
@@ -363,13 +284,13 @@ class BaseObjectCondensationTrainer(BaseTrainer):
             for batch_idx, data in enumerate(self.valid_dataloader):
                 data = data.to(self.device)
 
-                x = self._preprocess_features(data)
+                x = self.model.preprocess_features(data)
                 pos = data.pos
                 y = data.y.squeeze(-1).long()
-                batch = self._get_batch_vector(x, getattr(data, "batch", None))
+                batch = self.model.get_batch_vector(x, getattr(data, "batch", None))
                 object_ids = create_unique_object_ids(y, batch, noise_idx)
 
-                x, pos, fea_mask, node_mask, idx_out = self._prepare_graph_inputs(
+                x, pos, fea_mask, node_mask, idx_out = self.model.prepare_graph_inputs(
                     x, pos, batch
                 )
                 x_c, beta = self.model(x, pos, fea_mask, node_mask)
@@ -419,15 +340,15 @@ class BaseObjectCondensationTrainer(BaseTrainer):
         data = next(iter(self.dataloader))
         data = data.to(self.device)
         pos = data.pos
-        x = self._preprocess_features(data)
+        x = self.model.preprocess_features(data)
         y = data.y.squeeze(-1).long()
-        batch = self._get_batch_vector(x, getattr(data, "batch", None))
+        batch = self.model.get_batch_vector(x, getattr(data, "batch", None))
 
         noise_idx = self.config.get("noise_idx", -1)
         object_ids = create_unique_object_ids(y, batch, noise_idx)
 
         x, pos, batch, object_ids = self._apply_downsampling(x, pos, batch, object_ids)
-        x, pos, fea_mask, node_mask, _ = self._prepare_graph_inputs(x, pos, batch)
+        x, pos, fea_mask, node_mask, _ = self.model.prepare_graph_inputs(x, pos, batch)
 
         batch_size = Dim("batch_size", min=1)
         graph_size = Dim("graph_size", min=1)
@@ -438,7 +359,7 @@ class BaseObjectCondensationTrainer(BaseTrainer):
             "node_mask": {0: batch_size, 1: graph_size},
         }
 
-        artifacts_dir = self.save_dir / "onnx_artifacts"
+        artifacts_dir = self.checkpoint_dir / "onnx_artifacts"
         artifacts_dir.mkdir(parents=True, exist_ok=True)
 
         torch.onnx.export(
@@ -459,30 +380,7 @@ class PulseOCTrainer(BaseObjectCondensationTrainer):
     Trainer for object condensation on simulated data. Assumes input features are packed as (Energy, time) pairs for pulses.
     """
 
-    def _unpack_features(
-        self,
-        x: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Disentangle energy and time features, creating a mask for valid pulses. Assumes input x has shape [N, L] where L is even and represents (E, t) pairs for pulses. Returns reshaped features and mask.
-
-        Parameters
-        ----------
-        x : torch.Tensor
-            Input features, shape [..., L], where L is max feature length (e.g. max number of pulses per node times 2).
-
-        Returns
-        -------
-        x_out : torch.Tensor
-            Shape [..., P, 2], where P = L // 2.
-        mask : torch.Tensor
-            Shape [..., P], True where pulse is non-zero.
-        """
-        L = x.shape[-1]
-        P = L // 2
-        x_out = x.reshape(*x.shape[:-1], P, 2)
-        mask = x_out.abs().sum(dim=-1) > 0  # True if either energy or time is non-zero
-        return x_out, mask
+    pass
 
 
 class WaveformOCTrainer(BaseObjectCondensationTrainer):
@@ -490,118 +388,4 @@ class WaveformOCTrainer(BaseObjectCondensationTrainer):
     Trainer for object condensation for waveform data. Assumes input features are waveforms of shape [N, L], where N is number of nodes and L is waveform length. Pre-processes waveforms based on VME configuration, e.g. by subtracting pedestal values.
     """
 
-    def _setup(self):
-        """
-        Load VME and VTP configuration from CSV files if specified in the config. The configurations are stored as dicts of tensors keyed by column name (excluding 'channel').
-        """
-        vme_path = self.config.get("vme_config_path", self.config.get("vme_config"))
-        vtp_path = self.config.get("vtp_config_path", self.config.get("vtp_config"))
-        self.vme_config = self._load_vme_config(vme_path)
-        self.vtp_config = self._load_vtp_config(vtp_path)
-
-    def _load_config(self, path: Optional[pathlib.Path]) -> Dict[str, torch.Tensor]:
-        """
-        Load configuration CSV and return a dict of tensors keyed by column name (excluding 'channel').
-
-        Parameters
-        ----------
-        path : pathlib.Path or None
-            Path to CSV file. If None, returns empty dict.
-
-        Returns
-        -------
-        Dict[str, torch.Tensor]
-            Mapping from config field name to 1D float32 tensor.
-        """
-        if path is None:
-            return {}
-
-        path = pathlib.Path(path)
-        if not path.exists():
-            raise FileNotFoundError(f"Config file not found: {path}")
-
-        df = pd.read_csv(path)
-
-        if "channel" not in df.columns:
-            raise ValueError("CSV must contain a 'channel' column")
-
-        config: Dict[str, torch.Tensor] = {}
-
-        for col in df.columns:
-            if col == "channel":
-                continue
-
-            values = df[col].to_numpy(dtype="float32", copy=False)
-            config[col] = torch.from_numpy(values)
-
-        return config
-
-    def _load_vtp_config(self, path: Optional[pathlib.Path]) -> Dict[str, torch.Tensor]:
-        """Load VTP configuration from CSV file."""
-        return self._load_config(path)
-
-    def _load_vme_config(self, path: Optional[pathlib.Path]) -> Dict[str, torch.Tensor]:
-        """Load VME configuration from CSV file."""
-        return self._load_config(path)
-
-    def _preprocess_features(self, data: Any) -> torch.Tensor:
-        """
-        Pre-process waveform features based on VME configuration. For example, subtract pedestal values from waveforms if specified in the VME config.
-
-        Parameters
-        ----------
-        data : Any
-            The input data object with fields 'x' for waveforms and 'pos' for node positions. The 'pos' field is used to determine the channel index for each waveform based on the x and y coordinates.
-
-        Returns
-        -------
-        torch.Tensor
-            Pre-processed waveform tensor of shape [N, L], where N is number of nodes and L is waveform length.
-        """
-        wf = data.x
-        pos = data.pos
-        channels = get_node_index_from_position(pos[:, 1], pos[:, 0])
-        return self._preprocess_wf(wf, channels)
-
-    def _preprocess_wf(self, wf: torch.Tensor, channels: torch.Tensor) -> torch.Tensor:
-        """
-        Pre-process waveform based on VME configuration. Subtract pedestal if specified.
-
-        Parameters
-        ----------
-        wf: torch.Tensor
-            Input waveform tensor of shape [N, L], where N is number of nodes, L is waveform length.
-
-        channels : torch.Tensor
-            Tensor of shape [N,] indicating the channel index for each waveform.
-
-        Returns
-        -------
-        torch.Tensor
-            Processed waveform tensor of shape [N, L].
-        """
-        if self.vme_config is None:
-            return wf
-
-        ped = self.vme_config.get("FADC250_ALLCH_PED")
-        if ped is None:
-            return wf
-
-        if ped.ndim == 1:
-            ped = ped.unsqueeze(-1)  # match wf shape if needed
-
-        if channels.shape[0] != wf.shape[0]:
-            raise ValueError(
-                f"Channels tensor length ({channels.shape[0]}) does not match number of waveforms ({wf.shape[0]})."
-            )
-
-        if channels.numel() > 0 and (
-            channels.min() < 0 or channels.max() >= ped.shape[0]
-        ):
-            raise ValueError(
-                f"Waveform channels must be in [0, {ped.shape[0]}), got "
-                f"[{channels.min().item()}, {channels.max().item()}]."
-            )
-
-        wf = wf - ped.to(wf.device)[channels.long()]
-        return wf
+    pass

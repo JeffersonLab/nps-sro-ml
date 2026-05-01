@@ -1,4 +1,5 @@
 from .encoders import PulseSetEncoder, WaveformEncoder
+from .oc_base import ObjectCondensationBaseModel
 from .oc_attn import ObjectCondensationModel
 from .oc_balance import BalancedObjectCondensationModel
 from .oc_inference import oc_inference_per_batch, oc_inference_per_graph
@@ -18,6 +19,7 @@ from .oc_loss import (
 
 __all__ = [
     "BalancedObjectCondensationModel",
+    "ObjectCondensationBaseModel",
     "ObjectCondensationModel",
     "PulseSetEncoder",
     "WaveformEncoder",
