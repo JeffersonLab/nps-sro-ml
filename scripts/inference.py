@@ -42,7 +42,7 @@ def main(cfg: ConfigParser):
 
     df = results.to_dataframe()
 
-    out_dir = cfg.get("save_dir") / "inference"
+    out_dir = cfg.get("out_dir")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     df.to_csv(out_dir / "results.csv", index=False)
@@ -80,6 +80,11 @@ if __name__ == "__main__":
             ['-m', '--model'],
             type=pathlib.Path,
             target='model_pth',
+        ),
+        CustomArgs(
+            ['-o', '--out_dir'],
+            type=pathlib.Path,
+            target='out_dir',
         ),
     ]
     cfg = ConfigParser.from_args(parser, options)
