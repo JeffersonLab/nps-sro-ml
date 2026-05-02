@@ -63,9 +63,8 @@ int main(int argc, char **argv) {
 	int processedEntries = 0;
 	int savedEvents = 0;
 	int useEntries = readEntries < 0 ? chain->GetEntries() : std::min(readEntries, (int)chain->GetEntries());
-	auto isDirected = edgeAlgorithm == "center_to_neighbor";
 
-	GraphUtils::GraphBuilder graphBuilder(NPS::NTIME, 1, 0, 2, isDirected, true, createEdges);
+	GraphUtils::GraphBuilder graphBuilder(NPS::NTIME, 1, 0, 2, false, true, createEdges);
 
 	auto finishEvent = [&]() {
 		graphBuilder.reset();
@@ -73,7 +72,8 @@ int main(int argc, char **argv) {
 	};
 
 	while (processedEntries < useEntries) {
-		std::cout << "\rProcessing entry " << processedEntries + 1 << "/" << useEntries << std::flush;
+		// std::cout << "\rProcessing entry " << processedEntries + 1 << "/" << useEntries << std::flush;
+		std::cout << "\rProcessing entry " << processedEntries + 1 << "/" << useEntries << std::endl;
 
 		int currEvent = startEntry + processedEntries;
 		chain->GetEntry(currEvent);
@@ -110,20 +110,22 @@ int main(int argc, char **argv) {
 		for (const auto &block : blocks) {
 			auto [col, row] = geometry.getColRowFromBlock(block);
 			graphBuilder.addNodePosition(block, {static_cast<double>(col), static_cast<double>(row)});
-			graphBuilder.addNodeTarget(block, {static_cast<double>(buffer.NPS_cal_fly_block_clusterID[block])});
 		}
 
 		std::unordered_map<int, std::vector<int>> clusterIds;
 		buildClusterIdMap(buffer.Ndata_NPS_cal_fly_block_clusterID, &buffer.NPS_cal_fly_block_clusterID[0], clusterIds);
+
+		// There is no overlapping clusters in this dataset, so each cluster corresponds to one connected component. We
+		// can directly use cluster ID as node target without building connected components.
+		for (const auto &[cid, nodes] : clusterIds) {
+			for (int node_id : nodes) {
+				graphBuilder.addNodeTarget(node_id, {static_cast<double>(cid)});
+			}
+		}
+
 		if (createEdges) {
-
 			for (const auto &[cid, nodes] : clusterIds) {
-
-				if (nodes.size() == 1) {
-					graphBuilder.addEdge(nodes[0], nodes[0]);
-				} else {
-					graphBuilder.addEdges(nodes, edgeAlgorithm);
-				}
+				graphBuilder.addEdges(nodes, edgeAlgorithm);
 			}
 		}
 
@@ -146,12 +148,6 @@ int main(int argc, char **argv) {
 
 		// Build graph and save tensors
 		auto graphData = graphBuilder.buildGraph();
-
-		if (graphBuilder.isEmpty()) {
-			finishEvent();
-			continue;
-		}
-
 		if (debug && createEdges) {
 			// this is only valid if there is no overlapping clusters.
 			auto components = GraphUtils::getConnectedComponents(graphData.edgeIndex);
@@ -234,7 +230,6 @@ void addArguments(int argc, char **argv) {
 
 	ARGS.add_argument("--edge-algorithm")
 		.help("algorithm to create edges (fully_connected, center_to_neighbor, etc.)")
-		.choices("fully_connected", "center_to_neighbor")
 		.default_value(std::string("fully_connected"))
 		.required();
 

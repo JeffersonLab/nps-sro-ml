@@ -62,8 +62,8 @@ int main(int argc, char **argv) {
 	const int nfeat_perPulse = 2; // energy and time
 	const int nclus_perEvent = 2; // only 2 photons in each geant4 event, so at most 2 clusters
 	int maxPulses = overlaps * nfeat_perPulse * nclus_perEvent;
-	auto isDirected = edgeAlgorithm == "center_to_neighbor";
-	GraphUtils::GraphBuilder graphBuilder(maxPulses, 1, 0, 2, isDirected, true, createEdges);
+    const int maxTargetIdsPerNode = overlaps * nclus_perEvent;
+	GraphUtils::GraphBuilder graphBuilder(maxPulses, maxTargetIdsPerNode, 0, 2, false, true, createEdges);
 
 	// buffer for overlapping events
 	std::vector<NPS::Cluster> clusters;
@@ -97,8 +97,9 @@ int main(int argc, char **argv) {
 			std::map<int, std::vector<double>>
 				blockPulseMap; // blockID to [energy, time, energy, time, ...] for all pulses
 
-			std::unordered_map<int, int> nodeToBlockId;
-			std::unordered_map<int, int> nodeToClusterId;
+            std::unordered_map<int, int> nodeToBlockId;
+            std::unordered_map<int, int> blockToNodeId;
+            std::unordered_map<int, std::vector<int>> nodeToClusterIds;            
 
 			int nodeId = 0;
 			for (size_t i = 0; i < clusters.size(); i++) {
@@ -106,16 +107,41 @@ int main(int argc, char **argv) {
 
 				for (const auto &signal : cluster.signals) {
 					int blockId_ = signal.blockID;
-					// blockId_ in the geant4 fills y first, so we need to convert it back to col,row and then to
-					// blockId for the graph
-					int col = blockId_ / NPS::NROWS;
-					int row = blockId_ % NPS::NROWS;
+					auto [col, row] = geometry.getColRowFromBlock(blockId_);
 					int blockId = geometry.getBlockFromColRow(col, row);
 
-					clustToNodeIds[i + 1].push_back(nodeId);
-					nodeToBlockId[nodeId] = blockId;
-					nodeToClusterId[nodeId] = i + 1;
-					nodeId++;
+					// clustToNodeIds[i + 1].push_back(nodeId);
+					// nodeToBlockId[nodeId] = blockId;
+					// nodeToClusterId[nodeId] = i + 1;
+					// nodeId++;
+
+                    int clusterId = static_cast<int>(i + 1);
+
+                    // Reuse one graph node per detector block.
+                    // If multiple overlapping clusters hit the same block,
+                    // this node receives multiple cluster/object IDs.
+                    int currNodeId;
+                    auto blockNodeIt = blockToNodeId.find(blockId);
+
+                    if (blockNodeIt == blockToNodeId.end()) {
+                        currNodeId = nodeId++;
+                        blockToNodeId[blockId] = currNodeId;
+                        nodeToBlockId[currNodeId] = blockId;
+                    } else {
+                        currNodeId = blockNodeIt->second;
+                    }
+
+                    // Add node to this cluster's edge-building list once.
+                    auto &nodesForCluster = clustToNodeIds[clusterId];
+                    if (std::find(nodesForCluster.begin(), nodesForCluster.end(), currNodeId) == nodesForCluster.end()) {
+                        nodesForCluster.push_back(currNodeId);
+                    }
+
+                    // Add cluster/object ID to this node once.
+                    auto &clusterIdsForNode = nodeToClusterIds[currNodeId];
+                    if (std::find(clusterIdsForNode.begin(), clusterIdsForNode.end(), clusterId) == clusterIdsForNode.end()) {
+                        clusterIdsForNode.push_back(clusterId);
+                    }                    
 
 					for (const auto &pulse : signal.pulses) {
 						blockPulseMap[blockId].push_back(pulse.energy);
@@ -130,45 +156,24 @@ int main(int argc, char **argv) {
 				graphBuilder.addNode(nodeId, blockPulseMap[blockId]);
 				auto [col, row] = geometry.getColRowFromBlock(blockId);
 				graphBuilder.addNodePosition(nodeId, {static_cast<double>(col), static_cast<double>(row)});
-				graphBuilder.addNodeTarget(nodeId, {static_cast<double>(nodeToClusterId[nodeId])});
+				
+                
+                std::vector<double> targetIds(maxTargetIdsPerNode, 0.0); // 0 means padding / no object ID
+
+                const auto &clusterIds = nodeToClusterIds[nodeId];
+                assert(clusterIds.size() <= static_cast<size_t>(maxTargetIdsPerNode));
+
+                for (size_t k = 0; k < clusterIds.size(); ++k) {
+                    targetIds[k] = static_cast<double>(clusterIds[k]);
+                }
+
+                graphBuilder.addNodeTarget(nodeId, targetIds);
 			}
 
 			if (createEdges) {
 				for (const auto &[cid, nodes] : clustToNodeIds) {
-					if (nodes.size() == 1) {
-						graphBuilder.addEdge(nodes[0], nodes[0]);
-						continue;
-					}
-
-					std::vector<int> sortedNodes = nodes;
-					int centerNode = -1;
-					double earliestTime = std::numeric_limits<double>::max();
-					for (int nodeId : sortedNodes) {
-						int blockId = nodeToBlockId[nodeId];
-						for (size_t i = 1; i < blockPulseMap[blockId].size(); i += 2) { // time is at odd indices
-							if (blockPulseMap[blockId][i] < earliestTime) {
-								earliestTime = blockPulseMap[blockId][i];
-								centerNode = nodeId;
-							}
-						}
-					}
-
-					// move the center node to the front of the list
-					auto it = std::find(sortedNodes.begin(), sortedNodes.end(), centerNode);
-					if (it != sortedNodes.end()) {
-						std::iter_swap(sortedNodes.begin(), it);
-					}
-					graphBuilder.addEdges(sortedNodes, edgeAlgorithm);
+					graphBuilder.addEdges(nodes, edgeAlgorithm);
 				}
-			}
-
-			// check if we have at least one node before saving the graph
-			if (graphBuilder.isEmpty()) {
-				std::cout << "Warning: No nodes in the graph for events " << (currEvent - overlaps + 1) << " to "
-						  << currEvent << ". Skipping graph saving." << std::endl;
-				clusters.clear();
-				graphBuilder.reset();
-				continue;
 			}
 
 			auto graphData = graphBuilder.buildGraph();
@@ -227,8 +232,7 @@ void addArguments(int argc, char **argv) {
 
 	ARGS.add_argument("--edge-algorithm")
 		.help("algorithm to create edges (fully_connected, center_to_neighbor, etc.)")
-		.choices("fully_connected", "center_to_neighbor")
-		.default_value(std::string("center_to_neighbor"))
+		.default_value(std::string("fully_connected"))
 		.required();
 
 	ARGS.add_argument("--start-event").help("starting event number").default_value(0).scan<'i', int>();
