@@ -70,9 +70,6 @@ int main(int argc, char **argv) {
 
 	while (processedEntries < useEntries) {
 
-		std::cout << "\rProcessing entry " << processedEntries + 1 << "/" << useEntries << std::endl;
-		// std::cout << "\rProcessing entry " << processedEntries + 1 << "/" << useEntries << std::flush;
-
 		int currEvent = startEntry + processedEntries;
 		chain->GetEntry(currEvent);
 
@@ -109,11 +106,6 @@ int main(int argc, char **argv) {
 					int blockId_ = signal.blockID;
 					auto [col, row] = geometry.getColRowFromBlock(blockId_);
 					int blockId = geometry.getBlockFromColRow(col, row);
-
-					// clustToNodeIds[i + 1].push_back(nodeId);
-					// nodeToBlockId[nodeId] = blockId;
-					// nodeToClusterId[nodeId] = i + 1;
-					// nodeId++;
 
                     int clusterId = static_cast<int>(i + 1);
 
@@ -158,7 +150,7 @@ int main(int argc, char **argv) {
 				graphBuilder.addNodePosition(nodeId, {static_cast<double>(col), static_cast<double>(row)});
 				
                 
-                std::vector<double> targetIds(maxTargetIdsPerNode, 0.0); // 0 means padding / no object ID
+                std::vector<double> targetIds(maxTargetIdsPerNode, -1.0); // padded with -1
 
                 const auto &clusterIds = nodeToClusterIds[nodeId];
                 assert(clusterIds.size() <= static_cast<size_t>(maxTargetIdsPerNode));
