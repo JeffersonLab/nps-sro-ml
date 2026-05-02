@@ -536,24 +536,31 @@ class MultiPulseObjectCondensationModel(ObjectCondensationBaseModel):
             "cluster_token_gate": mix_gate,
         }
 
-    def _pool_legacy_outputs(
+    def _build_multi_pulse_outputs(
         self,
+        proposal: dict[str, torch.Tensor],
         cluster_outputs: dict[str, torch.Tensor],
         node_mask: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        refined_score = cluster_outputs["refined_pulse_score"]
-        cluster_beta = cluster_outputs["cluster_seedness_beta"]
-        cluster_z = cluster_outputs["latent_cluster_coordinate_z"]
-        cluster_mask = cluster_outputs["cluster_token_mask"]
+    ) -> dict[str, torch.Tensor]:
+        gate = cluster_outputs["cluster_token_mask"].to(
+            cluster_outputs["cluster_seedness_beta"].dtype
+        )
+        node_gate = node_mask.unsqueeze(-1).to(gate.dtype)
 
-        token_weight = refined_score * cluster_mask.to(refined_score.dtype)
-        token_weight = token_weight / token_weight.sum(dim=-1, keepdim=True).clamp_min(1e-6)
-        x_c = (cluster_z * token_weight.unsqueeze(-1)).sum(dim=2)
-        beta = cluster_beta.max(dim=-1, keepdim=True).values
-
-        x_c = x_c * node_mask.unsqueeze(-1).to(x_c.dtype)
-        beta = beta * node_mask.unsqueeze(-1).to(beta.dtype)
-        return x_c, beta
+        return {
+            "pulse_beta": cluster_outputs["cluster_seedness_beta"] * node_gate,
+            "pulse_x_c": cluster_outputs["latent_cluster_coordinate_z"]
+            * gate.unsqueeze(-1)
+            * node_gate.unsqueeze(-1),
+            "pulse_score": cluster_outputs["refined_pulse_score"] * node_gate,
+            "pulse_time": cluster_outputs["refined_time"] * node_gate,
+            "pulse_charge": cluster_outputs["refined_charge"] * node_gate,
+            "proposal_score": proposal["pulse_score"] * node_gate,
+            "proposal_time": proposal["pulse_time"] * node_gate,
+            "proposal_width": proposal["pulse_width"] * node_gate,
+            "proposal_amplitude": proposal["pulse_amplitude"] * node_gate,
+            "token_mask": cluster_outputs["cluster_token_mask"] & node_mask.unsqueeze(-1),
+        }
 
     def forward(
         self,
@@ -561,14 +568,13 @@ class MultiPulseObjectCondensationModel(ObjectCondensationBaseModel):
         pos: torch.Tensor,
         fea_mask: torch.Tensor,
         node_mask: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> dict[str, torch.Tensor]:
         proposal = self.propose_pulses(x, pos, fea_mask, node_mask)
         cluster_outputs = self.cluster_pulses(
             proposal=proposal,
             prune_mask=None,
             soft_pruning=True,
         )
-        x_c, beta = self._pool_legacy_outputs(cluster_outputs, node_mask)
 
         self.last_proposal_score = proposal["pulse_score"]
         self.last_proposal_time = proposal["pulse_time"]
@@ -584,4 +590,4 @@ class MultiPulseObjectCondensationModel(ObjectCondensationBaseModel):
         self.last_refined_charge = cluster_outputs["refined_charge"]
         self.last_cluster_z = cluster_outputs["latent_cluster_coordinate_z"]
 
-        return x_c, beta
+        return self._build_multi_pulse_outputs(proposal, cluster_outputs, node_mask)

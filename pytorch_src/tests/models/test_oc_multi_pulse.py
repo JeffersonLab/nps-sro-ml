@@ -21,10 +21,11 @@ def test_oc_multi_pulse_waveform_shapes_and_proposal_cache():
         num_pulse_tokens=2,
     )
 
-    x_c, beta = model(x, pos, fea_mask, node_mask)
+    outputs = model(x, pos, fea_mask, node_mask)
 
-    assert x_c.shape == (batch_size, num_nodes, 2)
-    assert beta.shape == (batch_size, num_nodes, 1)
+    assert outputs["pulse_x_c"].shape == (batch_size, num_nodes, 2, 2)
+    assert outputs["pulse_beta"].shape == (batch_size, num_nodes, 2)
+    assert outputs["pulse_score"].shape == (batch_size, num_nodes, 2)
     assert model.last_proposal_score.shape == (batch_size, num_nodes, 2)
     assert model.last_proposal_time.shape == (batch_size, num_nodes, 2)
     assert model.last_proposal_width.shape == (batch_size, num_nodes, 2)
@@ -79,10 +80,20 @@ def test_oc_multi_pulse_masks_invalid_nodes():
         num_pulse_tokens=2,
     )
 
-    x_c, beta = model(x, pos, fea_mask, node_mask)
+    outputs = model(x, pos, fea_mask, node_mask)
 
-    assert torch.allclose(x_c[:, 2:], torch.zeros_like(x_c[:, 2:]))
-    assert torch.allclose(beta[:, 2:], torch.zeros_like(beta[:, 2:]))
+    assert torch.allclose(
+        outputs["pulse_x_c"][:, 2:],
+        torch.zeros_like(outputs["pulse_x_c"][:, 2:]),
+    )
+    assert torch.allclose(
+        outputs["pulse_beta"][:, 2:],
+        torch.zeros_like(outputs["pulse_beta"][:, 2:]),
+    )
+    assert torch.allclose(
+        outputs["pulse_score"][:, 2:],
+        torch.zeros_like(outputs["pulse_score"][:, 2:]),
+    )
     assert torch.allclose(
         model.last_proposal_score[:, 2:],
         torch.zeros_like(model.last_proposal_score[:, 2:]),
@@ -128,3 +139,29 @@ def test_oc_multi_pulse_exposes_hard_pruning_path():
     assert cluster["cluster_seedness_beta"].shape == (batch_size, num_nodes, 3)
     assert cluster["latent_cluster_coordinate_z"].shape == (batch_size, num_nodes, 3, 2)
     assert cluster["cluster_token_mask"].shape == (batch_size, num_nodes, 3)
+
+
+def test_oc_multi_pulse_forward_returns_token_outputs():
+    batch_size, num_nodes, waveform_len = 2, 5, 110
+    x = torch.randn(batch_size, num_nodes, waveform_len)
+    pos = torch.randn(num_nodes, 2)
+    fea_mask = torch.ones(batch_size, num_nodes, waveform_len, dtype=torch.bool)
+    node_mask = torch.ones(batch_size, num_nodes, dtype=torch.bool)
+
+    model = MultiPulseObjectCondensationModel(
+        input_type="waveform",
+        d_model=32,
+        wf_d_model=32,
+        wf_enc_layers=1,
+        wf_enc_heads=4,
+        n_enc_layers=1,
+        num_heads=4,
+        num_pulse_tokens=3,
+    )
+
+    outputs = model(x, pos, fea_mask, node_mask)
+
+    assert outputs["pulse_beta"].shape == (batch_size, num_nodes, 3)
+    assert outputs["pulse_x_c"].shape == (batch_size, num_nodes, 3, 2)
+    assert outputs["pulse_score"].shape == (batch_size, num_nodes, 3)
+    assert outputs["token_mask"].shape == (batch_size, num_nodes, 3)

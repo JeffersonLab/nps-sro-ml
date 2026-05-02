@@ -10,6 +10,7 @@ from .metrics import (
 )
 from .oc_inference import (
     BaseObjectCondensationInferencer,
+    MultiPulseOCInferencer,
     OcInferenceHyperparameters,
     OcInferenceResults,
     PulseOCInferencer,
@@ -21,6 +22,7 @@ from .oc_inference import (
 
 __all__ = [
     "BaseObjectCondensationInferencer",
+    "MultiPulseOCInferencer",
     "OcInferenceHyperparameters",
     "OcInferenceResults",
     "PulseOCInferencer",

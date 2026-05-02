@@ -46,10 +46,26 @@ class DummyMultiPulseModel(ObjectCondensationBaseModel):
         self.num_pulse_tokens = num_pulse_tokens
 
     def forward(self, x, pos, fea_mask, node_mask):
-        batch_size, num_nodes = node_mask.shape
-        x_c = torch.zeros(batch_size, num_nodes, 2, device=x.device)
-        beta = torch.zeros(batch_size, num_nodes, 1, device=x.device)
-        return x_c, beta
+        proposal = self.propose_pulses(x, pos, fea_mask, node_mask)
+        cluster_outputs = self.cluster_pulses(proposal)
+        gate = cluster_outputs["cluster_token_mask"].to(
+            cluster_outputs["cluster_seedness_beta"].dtype
+        )
+        node_gate = node_mask.unsqueeze(-1).to(gate.dtype)
+        return {
+            "pulse_beta": cluster_outputs["cluster_seedness_beta"] * node_gate,
+            "pulse_x_c": cluster_outputs["latent_cluster_coordinate_z"]
+            * gate.unsqueeze(-1)
+            * node_gate.unsqueeze(-1),
+            "pulse_score": cluster_outputs["refined_pulse_score"] * node_gate,
+            "pulse_time": cluster_outputs["refined_time"] * node_gate,
+            "pulse_charge": cluster_outputs["refined_charge"] * node_gate,
+            "proposal_score": proposal["pulse_score"] * node_gate,
+            "proposal_time": proposal["pulse_time"] * node_gate,
+            "proposal_width": proposal["pulse_width"] * node_gate,
+            "proposal_amplitude": proposal["pulse_amplitude"] * node_gate,
+            "token_mask": cluster_outputs["cluster_token_mask"] & node_mask.unsqueeze(-1),
+        }
 
     def propose_pulses(self, x, pos, fea_mask, node_mask):
         batch_size, num_nodes = node_mask.shape
@@ -86,12 +102,6 @@ class DummyMultiPulseModel(ObjectCondensationBaseModel):
             "cluster_token_mask": token_mask,
             "cluster_token_gate": gate,
         }
-
-    def _pool_legacy_outputs(self, cluster_outputs, node_mask):
-        x_c = cluster_outputs["latent_cluster_coordinate_z"].mean(dim=2)
-        beta = cluster_outputs["cluster_seedness_beta"].amax(dim=2, keepdim=True)
-        return x_c, beta
-
 
 def build_waveform_trainer(tmp_path, dataloader, **extra_config):
     model = DummyModel(input_type="waveform")

@@ -1,6 +1,7 @@
 import torch
 import pytest
 from models.oc_inference import (
+    MultiPulseOCInferencer,
     PulseOCInferencer,
     WaveformOCInferencer,
     oc_inference_per_graph,
@@ -33,6 +34,45 @@ class DummyData:
         if hasattr(self, "batch"):
             self.batch = self.batch.to(device)
         return self
+
+
+class DummyMultiPulseModel(ObjectCondensationBaseModel):
+    def __init__(self, input_type="pulse_set", num_pulse_tokens=2):
+        super().__init__(input_type=input_type)
+        self.weight = torch.nn.Parameter(torch.tensor(1.0))
+        self.num_pulse_tokens = num_pulse_tokens
+
+    def forward(self, x, pos, fea_mask, node_mask):
+        batch_size, num_nodes = node_mask.shape
+        pulse_beta = torch.tensor(
+            [[[0.9, 0.2], [0.1, 0.8]]],
+            dtype=x.dtype,
+            device=x.device,
+        ).expand(batch_size, num_nodes, -1)
+        pulse_score = torch.tensor(
+            [[[0.95, 0.1], [0.2, 0.9]]],
+            dtype=x.dtype,
+            device=x.device,
+        ).expand(batch_size, num_nodes, -1)
+        pulse_x_c = torch.tensor(
+            [[[[0.0, 0.0], [10.0, 10.0]], [[2.0, 0.0], [2.1, 0.0]]]],
+            dtype=x.dtype,
+            device=x.device,
+        ).expand(batch_size, num_nodes, -1, -1)
+        token_mask = node_mask.unsqueeze(-1).expand(batch_size, num_nodes, self.num_pulse_tokens)
+
+        return {
+            "pulse_beta": pulse_beta * token_mask.to(pulse_beta.dtype),
+            "pulse_x_c": pulse_x_c * token_mask.unsqueeze(-1).to(pulse_x_c.dtype),
+            "pulse_score": pulse_score * token_mask.to(pulse_score.dtype),
+            "pulse_time": torch.zeros_like(pulse_score),
+            "pulse_charge": torch.zeros_like(pulse_score),
+            "proposal_score": pulse_score * token_mask.to(pulse_score.dtype),
+            "proposal_time": torch.zeros_like(pulse_score),
+            "proposal_width": torch.zeros_like(pulse_score),
+            "proposal_amplitude": torch.zeros_like(pulse_score),
+            "token_mask": token_mask,
+        }
 
 
 def test_oc_inference_per_graph_basic():
@@ -361,3 +401,35 @@ def test_waveform_inferencer_preprocesses_waveforms_like_trainer(tmp_path):
     )
     assert torch.equal(node_mask, torch.tensor([[True, True]]))
     assert torch.equal(fea_mask, torch.tensor([[[True, True], [True, True]]]))
+
+
+def test_multi_pulse_inferencer_predicts_per_slot_clusters():
+    model = DummyMultiPulseModel(input_type="pulse_set", num_pulse_tokens=2)
+    inferencer = MultiPulseOCInferencer(model)
+    data = DummyData(
+        x=torch.tensor(
+            [
+                [1.0, 10.0, 0.0, 0.0],
+                [2.0, 20.0, 3.0, 30.0],
+            ],
+            dtype=torch.float32,
+        ),
+        pos=torch.tensor(
+            [[0.0, 0.0], [1.0, 0.0]],
+            dtype=torch.float32,
+        ),
+        y=torch.tensor([[11, -1], [-1, 22]], dtype=torch.long),
+    )
+
+    results = inferencer.infer_dataloader([data]).to_dataframe()
+
+    assert "pulse_cluster_ids_0" in results.columns
+    assert "pulse_cluster_ids_1" in results.columns
+    assert "pulse_object_ids_0" in results.columns
+    assert "pulse_object_ids_1" in results.columns
+    assert results["pulse_cluster_ids_0"].tolist() == [0, -1]
+    assert results["pulse_cluster_ids_1"].tolist() == [-1, 1]
+    assert results["pulse_object_ids_0"].tolist()[0] != -1
+    assert results["pulse_object_ids_1"].tolist()[0] == -1
+    assert results["pulse_object_ids_0"].tolist()[1] == -1
+    assert results["pulse_object_ids_1"].tolist()[1] != -1

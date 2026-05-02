@@ -152,6 +152,25 @@ class MultiPulseOCTrainer(BaseTrainer):
         )
         return torch.cat([tensor, pad], dim=-1)
 
+    def _pool_node_outputs(
+        self,
+        cluster_outputs: dict[str, torch.Tensor],
+        node_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        refined_score = cluster_outputs["refined_pulse_score"]
+        cluster_beta = cluster_outputs["cluster_seedness_beta"]
+        cluster_z = cluster_outputs["latent_cluster_coordinate_z"]
+        cluster_mask = cluster_outputs["cluster_token_mask"]
+
+        token_weight = refined_score * cluster_mask.to(refined_score.dtype)
+        token_weight = token_weight / token_weight.sum(dim=-1, keepdim=True).clamp_min(1e-6)
+        x_c = (cluster_z * token_weight.unsqueeze(-1)).sum(dim=2)
+        beta = cluster_beta.max(dim=-1, keepdim=True).values
+
+        x_c = x_c * node_mask.unsqueeze(-1).to(x_c.dtype)
+        beta = beta * node_mask.unsqueeze(-1).to(beta.dtype)
+        return x_c, beta
+
     def _compute_oc_losses(
         self,
         x_c: torch.Tensor,
@@ -393,9 +412,7 @@ class MultiPulseOCTrainer(BaseTrainer):
             + width_scale * width_loss
         )
 
-        pooled_x_c, pooled_beta = self.model._pool_legacy_outputs(
-            cluster_outputs, node_mask
-        )
+        pooled_x_c, pooled_beta = self._pool_node_outputs(cluster_outputs, node_mask)
         pooled_x_c = reorder_from_graph_batches(pooled_x_c, idx_out)
         pooled_beta = reorder_from_graph_batches(pooled_beta, idx_out).squeeze(-1)
 
