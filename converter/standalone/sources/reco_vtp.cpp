@@ -112,6 +112,15 @@ int main(int argc, char **argv) {
 			continue;
 		}
 
+		for (int block = 0; block < NPS::NBLOCKS; ++block) {
+			const auto signalIt = blockToSignalIndex.find(block);
+			const std::vector<double> waveform =
+				(signalIt != blockToSignalIndex.end()) ? signals[signalIt->second] : std::vector<double>(NPS::NTIME, 0.0);
+			graphBuilder.addNode(block, waveform);
+			auto [col, row] = geometry.getColRowFromBlock(block);
+			graphBuilder.addNodePosition(block, {static_cast<double>(col), static_cast<double>(row)});
+		}
+
 		for (int i = 0; i < blocks.size(); i++) {
 			auto channel = blocks[i];
 			fadcDevice.processRawWaveform(signals[i], channel, 0);
@@ -151,77 +160,67 @@ int main(int argc, char **argv) {
 		auto vtpEvent = buildVtpEventFromBuffer(buffer, geometry);
 
 		std::unordered_map<int, std::vector<int>> clustToNodeIds;
-		std::unordered_map<int, int> nodeToBlockId;
-		std::unordered_map<int, std::vector<int>> nodeToClusterIds; // block node id -> vector of cluster ids
+		std::unordered_map<int, std::vector<int>> nodeToClusterIds; // block id -> vector of cluster ids
 		std::unordered_set<int> usedRecoIndices;
-		int nodeId = 0;
 
 		auto sum = [](const std::vector<double> &vec) { return std::accumulate(vec.begin(), vec.end(), 0.0); };
-		   for (int iclus = 0; iclus < vtpEvent.nseeds; iclus++) {
-			   auto vtp_ch = vtpEvent.channels[iclus][0];   // vtp seed channel
-			   auto vtp_e = sum(vtpEvent.energies[iclus]); // vtp cluster energy
-			   auto vtp_time = vtpEvent.times[iclus][0];   // vtp seed time
-			   auto vtp_size = vtpEvent.clus_sizes[iclus]; // vtp cluster size
+		for (int iclus = 0; iclus < vtpEvent.nseeds; iclus++) {
+			auto vtp_ch = vtpEvent.channels[iclus][0];
+			auto vtp_e = sum(vtpEvent.energies[iclus]);
+			auto vtp_time = vtpEvent.times[iclus][0];
+			auto vtp_size = vtpEvent.clus_sizes[iclus];
 
-			   for (int i_reco = 0; i_reco < recoEvent.nseeds; i_reco++) {
-				   if (usedRecoIndices.count(i_reco)) {
-					   continue;
-				   }
+			for (int i_reco = 0; i_reco < recoEvent.nseeds; i_reco++) {
+				if (usedRecoIndices.count(i_reco)) {
+					continue;
+				}
 
-				   auto reco_ch = recoEvent.channels[i_reco][0];  // reco seed channel
-				   auto reco_e = sum(recoEvent.energies[i_reco]); // reco cluster energy
-				   auto reco_time = recoEvent.times[i_reco][0];   // reco seed time
-				   auto reco_size = recoEvent.clus_sizes[i_reco]; // reco cluster size
+				auto reco_ch = recoEvent.channels[i_reco][0];
+				auto reco_e = sum(recoEvent.energies[i_reco]);
+				auto reco_time = recoEvent.times[i_reco][0];
+				auto reco_size = recoEvent.clus_sizes[i_reco];
 
-				   bool match = (vtp_ch == reco_ch);
-				   match &= (vtp_time == reco_time);
-				   match &= (vtp_size == reco_size);
-				   match &= (std::abs(vtp_e - reco_e) < energyDiff);
+				bool match = (vtp_ch == reco_ch);
+				match &= (vtp_time == reco_time);
+				match &= (vtp_size == reco_size);
+				match &= (std::abs(vtp_e - reco_e) < energyDiff);
 
-				   bool time_cut = (vtp_time >= timeWindow[0]) && (vtp_time <= timeWindow[1]);
+				bool inTimeWindow = (vtp_time >= timeWindow[0]) && (vtp_time <= timeWindow[1]);
 
-				   if (match) {
-					   usedRecoIndices.insert(i_reco);
-					   if (time_cut) {
-						   continue;
-					   }
+				if (!match || !inTimeWindow) {
+					continue;
+				}
 
-					   for (const auto &ch : recoEvent.channels[i_reco]) {
-						   clustToNodeIds[iclus].push_back(nodeId);
-						   nodeToBlockId[nodeId] = ch;
-						   // Add cluster id to node's cluster id vector, avoid duplicates
-						   auto &vec = nodeToClusterIds[nodeId];
-						   if (std::find(vec.begin(), vec.end(), iclus) == vec.end()) {
-							   vec.push_back(iclus);
-						   }
-						   nodeId++;
-					   }
-				   }
-			   }
-		   }
+				usedRecoIndices.insert(i_reco);
+				const int clusterId = iclus + 1;
+				auto &clusterNodes = clustToNodeIds[clusterId];
 
-		   // For each node, collect all cluster IDs (object IDs) it belongs to, pad to maxTargetIdsPerNode with -1
-		   std::unordered_set<int> allNodeIds;
-		   for (const auto &[cid, nodes] : clustToNodeIds) {
-			   for (int node_id : nodes) {
-				   allNodeIds.insert(node_id);
-			   }
-		   }
-		   for (int node_id : allNodeIds) {
-			   int blockId = nodeToBlockId[node_id];
-			   int signalIndex = blockToSignalIndex[blockId];
-			   graphBuilder.addNode(node_id, signals[signalIndex]);
+				for (const auto &blockId : recoEvent.channels[i_reco]) {
+					if (std::find(clusterNodes.begin(), clusterNodes.end(), blockId) == clusterNodes.end()) {
+						clusterNodes.push_back(blockId);
+					}
 
-			   std::vector<double> targetIds(maxTargetIdsPerNode, -1.0); // -1 means padding / no object ID
-			   const auto &clusterIds = nodeToClusterIds[node_id];
-			   size_t n = std::min(clusterIds.size(), static_cast<size_t>(maxTargetIdsPerNode));
-			   for (size_t k = 0; k < n; ++k) {
-				   targetIds[k] = static_cast<double>(clusterIds[k]);
-			   }
-			   graphBuilder.addNodeTarget(node_id, targetIds);
-			   auto [col, row] = geometry.getColRowFromBlock(blockId);
-			   graphBuilder.addNodePosition(node_id, {static_cast<double>(col), static_cast<double>(row)});
-		   }
+					auto &clusterIdsForNode = nodeToClusterIds[blockId];
+					if (std::find(clusterIdsForNode.begin(), clusterIdsForNode.end(), clusterId) ==
+						clusterIdsForNode.end()) {
+						clusterIdsForNode.push_back(clusterId);
+					}
+				}
+				break;
+			}
+		}
+
+		for (int block = 0; block < NPS::NBLOCKS; ++block) {
+			std::vector<double> targetIds(maxTargetIdsPerNode, -1.0);
+			const auto targetIt = nodeToClusterIds.find(block);
+			if (targetIt != nodeToClusterIds.end()) {
+				size_t n = std::min(targetIt->second.size(), static_cast<size_t>(maxTargetIdsPerNode));
+				for (size_t k = 0; k < n; ++k) {
+					targetIds[k] = static_cast<double>(targetIt->second[k]);
+				}
+			}
+			graphBuilder.addNodeTarget(block, targetIds);
+		}
 
 		if (createEdges) {
 			for (const auto &[_, nodes] : clustToNodeIds) {
