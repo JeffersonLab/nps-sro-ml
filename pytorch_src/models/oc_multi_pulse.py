@@ -426,6 +426,7 @@ class MultiPulseObjectCondensationModel(ObjectCondensationBaseModel):
 
         token_embed, block_feature, token_time0, token_mask = self.tokenizer(x, fea_mask)
         token_embed = self.token_proj(token_embed)
+        block_feature = self.token_proj(block_feature)
         token_mask = token_mask & node_mask.unsqueeze(-1)
 
         geo_embed = self.geo_mlp(pos).unsqueeze(2)

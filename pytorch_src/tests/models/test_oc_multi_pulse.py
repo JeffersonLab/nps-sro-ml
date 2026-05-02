@@ -37,6 +37,30 @@ def test_oc_multi_pulse_waveform_shapes_and_proposal_cache():
     assert model.last_refined_charge.shape == (batch_size, num_nodes, 2)
 
 
+def test_oc_multi_pulse_projects_block_features_when_dims_differ():
+    batch_size, num_nodes, waveform_len = 2, 5, 110
+    x = torch.randn(batch_size, num_nodes, waveform_len)
+    pos = torch.randn(num_nodes, 2)
+    fea_mask = torch.ones(batch_size, num_nodes, waveform_len, dtype=torch.bool)
+    node_mask = torch.ones(batch_size, num_nodes, dtype=torch.bool)
+
+    model = MultiPulseObjectCondensationModel(
+        input_type="waveform",
+        d_model=64,
+        wf_d_model=32,
+        wf_enc_layers=1,
+        wf_enc_heads=4,
+        n_enc_layers=1,
+        num_heads=4,
+        num_pulse_tokens=2,
+    )
+
+    proposal = model.propose_pulses(x, pos, fea_mask, node_mask)
+
+    assert proposal["pulse_embedding"].shape == (batch_size, num_nodes, 2, 64)
+    assert proposal["pulse_score"].shape == (batch_size, num_nodes, 2)
+
+
 def test_oc_multi_pulse_masks_invalid_nodes():
     batch_size, num_nodes, waveform_len = 1, 4, 110
     x = torch.randn(batch_size, num_nodes, waveform_len)
