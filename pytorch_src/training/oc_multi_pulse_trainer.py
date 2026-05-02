@@ -443,14 +443,6 @@ class MultiPulseOCTrainer(BaseTrainer):
             ):
                 self.writer.add_scalar(key, outputs[key].item())
 
-            if batch_idx % 10 == 0:
-                self.writer.add_histogram("beta_train", outputs["beta"], bins='auto')
-                self.writer.add_histogram(
-                    "proposal_score_train",
-                    self.model.last_proposal_score,
-                    bins='auto',
-                )
-
             total_loss += outputs["loss"].item()
 
             if batch_idx % 10 == 0:
@@ -501,19 +493,8 @@ class MultiPulseOCTrainer(BaseTrainer):
                 ):
                     self.writer.add_scalar(key, outputs[key].item())
 
-                if batch_idx % 10 == 0:
-                    self.writer.add_histogram("beta_valid", outputs["beta"], bins='auto')
-                    self.writer.add_histogram(
-                        "proposal_score_valid",
-                        self.model.last_proposal_score,
-                        bins='auto',
-                    )
-
                 total_loss += outputs["loss"].item()
 
         self.writer.add_scalar('total_loss', total_loss)
-
-        for name, p in self.model.named_parameters():
-            self.writer.add_histogram(name, p, bins='auto')
 
         return {"loss": total_loss}
