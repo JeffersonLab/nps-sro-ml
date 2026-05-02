@@ -213,7 +213,7 @@ def test_export_onnx_uses_preprocessed_features_and_missing_batch_defaults(tmp_p
 def test_multi_pulse_trainer_computes_loss_dict(tmp_path):
     x = torch.tensor([[1.0, 2.0], [0.0, 0.0]], dtype=torch.float32)
     pos = torch.tensor([[0.0, 0.0], [1.0, 0.0]], dtype=torch.float32)
-    y = torch.tensor([[3.0, -1.0], [-1.0, -1.0]], dtype=torch.float32)
+    y = torch.tensor([[3, -1], [-1, -1]], dtype=torch.long)
     data = DummyData(x=x, pos=pos, y=y)
 
     trainer = build_multi_pulse_trainer(
@@ -228,3 +228,23 @@ def test_multi_pulse_trainer_computes_loss_dict(tmp_path):
     assert outputs["proposal_score_loss"].ndim == 0
     assert outputs["refined_score_loss"].ndim == 0
     assert outputs["beta"].shape == (2,)
+
+
+def test_multi_pulse_trainer_rejects_target_width_larger_than_model(tmp_path):
+    x = torch.tensor([[1.0, 2.0], [0.0, 0.0]], dtype=torch.float32)
+    pos = torch.tensor([[0.0, 0.0], [1.0, 0.0]], dtype=torch.float32)
+    y = torch.tensor([[3, 4, -1], [-1, -1, -1]], dtype=torch.long)
+    data = DummyData(x=x, pos=pos, y=y)
+
+    trainer = build_multi_pulse_trainer(
+        tmp_path,
+        dataloader=[data],
+        noise_idx=-1,
+    )
+
+    try:
+        trainer._forward_losses(data)
+    except ValueError as exc:
+        assert "Target object-id width exceeds model pulse-token width" in str(exc)
+    else:
+        raise AssertionError("Expected multi-pulse target width mismatch to raise ValueError")

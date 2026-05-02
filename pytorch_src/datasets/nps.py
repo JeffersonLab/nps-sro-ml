@@ -209,7 +209,7 @@ class NPSDataset(Dataset):
             x=node_features.float(),
             edge_index=edge_index,
             edge_attr=edge_attr,
-            y=node_targets.float(),
+            y=node_targets.long(),
             pos=node_positions.float(),
         )
 

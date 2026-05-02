@@ -257,7 +257,10 @@ class MultiPulseObjectCondensationModel(ObjectCondensationBaseModel):
 
         self.pos_dim = kwargs.get("pos_dim", 2)
         self.d_model = kwargs.get("d_model", 64)
-        self.num_pulse_tokens = kwargs.get("num_pulse_tokens", 2)
+        self.num_pulse_tokens = kwargs.get(
+            "num_pulse_tokens",
+            kwargs.get("max_objects_per_block", 2),
+        )
         self.num_cluster_layers = kwargs.get("n_enc_layers", 2)
         self.num_heads = kwargs.get("num_heads", 4)
         self.attn_dropout = kwargs.get("attn_dropout", 0.1)

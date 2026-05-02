@@ -136,7 +136,11 @@ class MultiPulseOCTrainer(BaseTrainer):
         if width == target_width:
             return tensor
         if width > target_width:
-            return tensor[..., :target_width]
+            raise ValueError(
+                "Target object-id width exceeds model pulse-token width. "
+                f"Got {width} target slots but only {target_width} pulse tokens. "
+                "Increase `num_pulse_tokens` or set `max_objects_per_block` to match the dataset."
+            )
 
         pad_shape = list(tensor.shape)
         pad_shape[-1] = target_width - width
@@ -304,7 +308,7 @@ class MultiPulseOCTrainer(BaseTrainer):
         x = self.model.preprocess_features(data)
         pos = data.pos
         batch = self.model.get_batch_vector(x, getattr(data, "batch", None))
-        y = data.y.squeeze(-1) if data.y.ndim == 2 and data.y.shape[-1] == 1 else data.y
+        y = data.y
         object_ids, token_object_ids = self._normalize_y_object_ids(y, batch)
 
         extra_tensors = {}
