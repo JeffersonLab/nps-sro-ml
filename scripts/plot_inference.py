@@ -142,13 +142,7 @@ def report(
             plot_dir / "pulse_cluster_size_distribution.png",
         )
 
-    pulse_metrics = compute_clustering_metrics(
-        event_ids=pulse_results["event_id"].to_numpy(),
-        det_x=pulse_results["det_x"].to_numpy(),
-        det_y=pulse_results["det_y"].to_numpy(),
-        object_ids=pulse_results["pulse_object_ids"].to_numpy(),
-        cluster_ids=pulse_results["pulse_cluster_ids"].to_numpy(),
-    )
+    pulse_metrics = _compute_pulse_clustering_metrics(pulse_results)
     _write_metrics_json(pulse_metrics, metric_dir / "pulse_metrics.json")
 
     _plot_confusion_matrix(
@@ -232,6 +226,129 @@ def _slot_column_or_default(
     if column in results.columns:
         return results[column].to_numpy()
     return np.full(len(results), default)
+
+
+def _compute_pulse_clustering_metrics(pulse_results: pd.DataFrame) -> dict:
+    event_ids = pulse_results["event_id"].to_numpy()
+    object_ids = pulse_results["pulse_object_ids"].to_numpy()
+    cluster_ids = pulse_results["pulse_cluster_ids"].to_numpy()
+
+    background_confusion = _background_confusion_matrix(object_ids, cluster_ids)
+    pair_confusion = _pairwise_pulse_confusion_matrix(
+        event_ids,
+        object_ids,
+        cluster_ids,
+    )
+    summary = _summarize_pulse_metrics(
+        event_ids,
+        object_ids,
+        background_confusion,
+        pair_confusion,
+    )
+    return {
+        "summary": summary,
+        "background_confusion": background_confusion,
+        "pair_confusion": pair_confusion,
+        "pair_confusion_overlap_tolerant": pair_confusion.copy(),
+    }
+
+
+def _background_confusion_matrix(
+    object_ids: np.ndarray,
+    cluster_ids: np.ndarray,
+) -> np.ndarray:
+    true_background = object_ids < 0
+    pred_background = cluster_ids < 0
+    return np.array(
+        [
+            [
+                np.sum(true_background & pred_background),
+                np.sum(true_background & ~pred_background),
+            ],
+            [
+                np.sum(~true_background & pred_background),
+                np.sum(~true_background & ~pred_background),
+            ],
+        ],
+        dtype=np.int64,
+    )
+
+
+def _pairwise_pulse_confusion_matrix(
+    event_ids: np.ndarray,
+    object_ids: np.ndarray,
+    cluster_ids: np.ndarray,
+) -> np.ndarray:
+    pair_confusion = np.zeros((2, 2), dtype=np.int64)
+
+    for event_id in np.unique(event_ids):
+        event_mask = event_ids == event_id
+        event_true = object_ids[event_mask]
+        event_pred = cluster_ids[event_mask]
+        num_rows = event_true.size
+        if num_rows < 2:
+            continue
+
+        for left_idx in range(num_rows - 1):
+            left_true = int(event_true[left_idx])
+            left_pred = int(event_pred[left_idx])
+            for right_idx in range(left_idx + 1, num_rows):
+                right_true = int(event_true[right_idx])
+                right_pred = int(event_pred[right_idx])
+
+                true_same = left_true >= 0 and right_true >= 0 and left_true == right_true
+                pred_same = left_pred >= 0 and right_pred >= 0 and left_pred == right_pred
+                pair_confusion[int(true_same), int(pred_same)] += 1
+
+    return pair_confusion
+
+
+def _summarize_pulse_metrics(
+    event_ids: np.ndarray,
+    object_ids: np.ndarray,
+    background_confusion: np.ndarray,
+    pair_confusion: np.ndarray,
+) -> dict:
+    return {
+        "num_events": int(np.unique(event_ids).size),
+        "num_nodes": int(event_ids.size),
+        "background_accuracy": _accuracy_from_confusion(background_confusion),
+        "background_precision": _precision_from_confusion(background_confusion),
+        "background_recall": _recall_from_confusion(background_confusion),
+        "background_f1": _f1_from_confusion(background_confusion),
+        "pairwise_accuracy": _accuracy_from_confusion(pair_confusion),
+        "pairwise_precision": _precision_from_confusion(pair_confusion),
+        "pairwise_recall": _recall_from_confusion(pair_confusion),
+        "pairwise_f1": _f1_from_confusion(pair_confusion),
+        "pairwise_overlap_tolerant_accuracy": _accuracy_from_confusion(pair_confusion),
+        "pairwise_overlap_tolerant_precision": _precision_from_confusion(pair_confusion),
+        "pairwise_overlap_tolerant_recall": _recall_from_confusion(pair_confusion),
+        "pairwise_overlap_tolerant_f1": _f1_from_confusion(pair_confusion),
+    }
+
+
+def _accuracy_from_confusion(confusion: np.ndarray) -> float:
+    return _safe_div(np.trace(confusion), confusion.sum())
+
+
+def _precision_from_confusion(confusion: np.ndarray) -> float:
+    _, fp = confusion[0]
+    fn, tp = confusion[1]
+    return _safe_div(tp, tp + fp)
+
+
+def _recall_from_confusion(confusion: np.ndarray) -> float:
+    _, _ = confusion[0]
+    fn, tp = confusion[1]
+    return _safe_div(tp, tp + fn)
+
+
+def _f1_from_confusion(confusion: np.ndarray) -> float:
+    _, fp = confusion[0]
+    fn, tp = confusion[1]
+    precision = _safe_div(tp, tp + fp)
+    recall = _safe_div(tp, tp + fn)
+    return _safe_div(2 * precision * recall, precision + recall)
 
 
 def _sample_events(
