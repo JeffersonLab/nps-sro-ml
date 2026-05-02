@@ -352,6 +352,10 @@ def _f1_from_confusion(confusion: np.ndarray) -> float:
     return _safe_div(2 * precision * recall, precision + recall)
 
 
+def _safe_div(num: float, den: float) -> float:
+    return float(num / den) if den else 0.0
+
+
 def _sample_events(
     event_ids: Iterable[int] | np.ndarray,
     num_events: int,
