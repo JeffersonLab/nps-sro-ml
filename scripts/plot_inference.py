@@ -198,9 +198,10 @@ def _extract_pulse_level_results(results: pd.DataFrame) -> pd.DataFrame | None:
 
     pulse_results = pd.concat(pulse_records, ignore_index=True)
 
+    # Keep only slots that are active in the model outputs. This excludes padded
+    # slots even when the CSV carries repeated truth IDs in pulse_object_ids.
     active_mask = (
-        (pulse_results["pulse_object_ids"] >= 0)
-        | (pulse_results["pulse_cluster_ids"] >= 0)
+        (pulse_results["pulse_cluster_ids"] >= 0)
         | (pulse_results["pulse_score"] > 0.0)
         | (pulse_results["pulse_beta"] > 0.0)
         | np.isfinite(pulse_results["pulse_min_d"])
