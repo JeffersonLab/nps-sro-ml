@@ -3,6 +3,7 @@
 import argparse
 import json
 import pathlib
+import re
 import sys
 from typing import Iterable
 
@@ -107,6 +108,132 @@ def report(
         title="Permutation-Invariant Cluster Recognition (Overlap Tolerant)",
         pth=plot_dir / "pair_confusion_overlap_tolerant_matrix.png",
     )
+
+    pulse_results = _extract_pulse_level_results(results)
+    if pulse_results is None or pulse_results.empty:
+        return
+
+    finite_pulse_min_d = pulse_results.loc[
+        np.isfinite(pulse_results["pulse_min_d"]),
+        "pulse_min_d",
+    ].to_numpy()
+    if finite_pulse_min_d.size > 0:
+        _plot_min_distance_distribution(
+            finite_pulse_min_d,
+            plot_dir / "pulse_min_distance_distribution.png",
+        )
+
+    _plot_beta_distribution(
+        pulse_results["pulse_beta"].to_numpy(),
+        plot_dir / "pulse_beta_distribution.png",
+    )
+    _plot_score_distribution(
+        pulse_results["pulse_score"].to_numpy(),
+        plot_dir / "pulse_score_distribution.png",
+    )
+
+    df_pulse_clus = pulse_results[pulse_results["pulse_cluster_ids"] >= 0]
+    if not df_pulse_clus.empty:
+        pulse_cluster_sizes = (
+            df_pulse_clus.groupby(["event_id", "pulse_cluster_ids"]).size().to_numpy()
+        )
+        _plot_cluster_size_distribution(
+            pulse_cluster_sizes,
+            plot_dir / "pulse_cluster_size_distribution.png",
+        )
+
+    pulse_metrics = compute_clustering_metrics(
+        event_ids=pulse_results["event_id"].to_numpy(),
+        det_x=pulse_results["det_x"].to_numpy(),
+        det_y=pulse_results["det_y"].to_numpy(),
+        object_ids=pulse_results["pulse_object_ids"].to_numpy(),
+        cluster_ids=pulse_results["pulse_cluster_ids"].to_numpy(),
+    )
+    _write_metrics_json(pulse_metrics, metric_dir / "pulse_metrics.json")
+
+    _plot_confusion_matrix(
+        matrix=pulse_metrics["background_confusion"],
+        row_labels=["true background", "true signal"],
+        col_labels=["pred background", "pred signal"],
+        title="Pulse Background Recognition",
+        pth=plot_dir / "pulse_background_confusion_matrix.png",
+    )
+    _plot_confusion_matrix(
+        matrix=pulse_metrics["pair_confusion"],
+        row_labels=["true different", "true same"],
+        col_labels=["pred different", "pred same"],
+        title="Pulse Cluster Recognition (Strict)",
+        pth=plot_dir / "pulse_pair_confusion_matrix.png",
+    )
+    _plot_confusion_matrix(
+        matrix=pulse_metrics["pair_confusion_overlap_tolerant"],
+        row_labels=["true different", "true same"],
+        col_labels=["pred different", "pred same"],
+        title="Pulse Cluster Recognition (Overlap Tolerant)",
+        pth=plot_dir / "pulse_pair_confusion_overlap_tolerant_matrix.png",
+    )
+
+
+def _extract_pulse_level_results(results: pd.DataFrame) -> pd.DataFrame | None:
+    pulse_slots = _find_slot_indices(results.columns, "pulse_cluster_ids")
+    if not pulse_slots:
+        return None
+
+    pulse_records: list[pd.DataFrame] = []
+    for slot in pulse_slots:
+        slot_frame = pd.DataFrame(
+            {
+                "event_id": results["event_id"].to_numpy(),
+                "det_x": results["det_x"].to_numpy(),
+                "det_y": results["det_y"].to_numpy(),
+                "slot": np.full(len(results), slot, dtype=np.int64),
+                "pulse_cluster_ids": _slot_column_or_default(
+                    results, f"pulse_cluster_ids_{slot}", -1
+                ),
+                "pulse_min_d": _slot_column_or_default(
+                    results, f"pulse_min_d_{slot}", np.inf
+                ),
+                "pulse_beta": _slot_column_or_default(results, f"pulse_beta_{slot}", 0.0),
+                "pulse_score": _slot_column_or_default(results, f"pulse_score_{slot}", 0.0),
+                "pulse_object_ids": _slot_column_or_default(
+                    results, f"pulse_object_ids_{slot}", -1
+                ),
+            }
+        )
+        pulse_records.append(slot_frame)
+
+    pulse_results = pd.concat(pulse_records, ignore_index=True)
+
+    active_mask = (
+        (pulse_results["pulse_object_ids"] >= 0)
+        | (pulse_results["pulse_cluster_ids"] >= 0)
+        | (pulse_results["pulse_score"] > 0.0)
+        | (pulse_results["pulse_beta"] > 0.0)
+        | np.isfinite(pulse_results["pulse_min_d"])
+    )
+    return pulse_results.loc[active_mask].reset_index(drop=True)
+
+
+def _find_slot_indices(columns: Iterable[str], prefix: str) -> list[int]:
+    pattern = re.compile(rf"^{re.escape(prefix)}_(\d+)$")
+    slots: list[int] = []
+    for column in columns:
+        match = pattern.match(column)
+        if match is not None:
+            slots.append(int(match.group(1)))
+    return sorted(set(slots))
+
+
+def _slot_column_or_default(
+    results: pd.DataFrame,
+    column: str,
+    default: float | int,
+) -> np.ndarray:
+    if column in results.columns:
+        return results[column].to_numpy()
+    return np.full(len(results), default)
+
+
 def _sample_events(
     event_ids: Iterable[int] | np.ndarray,
     num_events: int,
@@ -196,6 +323,22 @@ def _plot_beta_distribution(beta_arr: np.ndarray, pth: pathlib.Path) -> None:
         alpha=0.7,
     )
     ax.set_xlabel(r"$\mathrm{seedness} \ \beta$", fontsize=14)
+    ax.set_ylabel(r"$\mathrm{Counts}$", fontsize=14)
+    fig.savefig(pth)
+    plt.close(fig)
+
+
+def _plot_score_distribution(score_arr: np.ndarray, pth: pathlib.Path) -> None:
+    fig, ax = plt.subplots(1, 1, figsize=(6, 3.5), constrained_layout=True, dpi=300)
+    ax.hist(
+        score_arr,
+        bins=100,
+        range=(0, 1),
+        histtype="stepfilled",
+        color="blue",
+        alpha=0.7,
+    )
+    ax.set_xlabel(r"$\mathrm{pulse} \ \mathrm{score}$", fontsize=14)
     ax.set_ylabel(r"$\mathrm{Counts}$", fontsize=14)
     fig.savefig(pth)
     plt.close(fig)
