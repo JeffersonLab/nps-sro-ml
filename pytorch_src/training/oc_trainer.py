@@ -11,6 +11,7 @@ from models.oc_loss import oc_loss_per_batch
 from utils.graph import (
     create_unique_object_ids,
     reorder_from_graph_batches,
+    pack_to_graph_batches,
 )
 
 
@@ -64,7 +65,7 @@ def create_sample_mask(
     return mask
 
 
-class BaseObjectCondensationTrainer(BaseTrainer):
+class ObjectCondensationTrainer(BaseTrainer):
     """
     Base Object Condensation Trainer class. Implements the common training loop and loss computation for object condensation, while allowing for flexible input feature formats and pre-processing steps through methods that can be overridden by subclasses.
     """
@@ -88,19 +89,11 @@ class BaseObjectCondensationTrainer(BaseTrainer):
         self.device = device
         self.do_validation = self.valid_dataloader is not None
 
-        self._setup()
-
     def _progress(self, batch_idx):
         """Return a string progress indicator for the current batch index."""
         base = '[{}/{} ({:.0f}%)]'
         total = len(self.dataloader)
         return base.format(batch_idx, total, 100.0 * batch_idx / total)
-
-    def _setup(self):
-        """
-        Set additonal attributes needed for training, such as loading scalers or other pre-processing tools.
-        """
-        self.model.configure_input_preprocessing(self.config)
 
     def _compute_oc_losses(
         self,
@@ -183,9 +176,6 @@ class BaseObjectCondensationTrainer(BaseTrainer):
         mask_scale = self.config.get("mask_scale", None)
         noise_idx = self.config.get("noise_idx", -1)
 
-        if mask_scale is None:
-            return x, pos, batch, object_ids
-
         mask = create_sample_mask(
             object_ids,
             batch=batch,
@@ -202,6 +192,17 @@ class BaseObjectCondensationTrainer(BaseTrainer):
 
         return x, pos, batch, object_ids
 
+    def _prepare_graph_inputs(
+        self, x: torch.Tensor, pos: torch.Tensor, batch: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[torch.Tensor]]:
+        x_out, idx_out, node_mask = pack_to_graph_batches(x, [pos], batch=batch)
+        x_graph = x_out[0]
+        pos_graph = x_out[1]
+        return x_graph, pos_graph, node_mask, idx_out
+
+    def _preprocess(self, data):
+        return data
+
     def _train_epoch(self, epoch):
 
         self.model.train()
@@ -213,21 +214,24 @@ class BaseObjectCondensationTrainer(BaseTrainer):
             self.optimizer.zero_grad()
             data = data.to(self.device)
 
-            x = self.model.preprocess_features(data)
+            x = data.x
             y = data.y.squeeze(-1).long()
             pos = data.pos
-            batch = self.model.get_batch_vector(x, getattr(data, "batch", None))
+            batch = (
+                data.batch
+                if hasattr(data, "batch")
+                else torch.zeros(x.shape[0], dtype=torch.long, device=x.device)
+            )
             object_ids = create_unique_object_ids(y, batch, noise_idx)
 
-            x, pos, batch, object_ids = self._apply_downsampling(
-                x, pos, batch, object_ids
-            )
+            if self.config.get("apply_downsample"):
+                x, pos, batch, object_ids = self._apply_downsampling(
+                    x, pos, batch, object_ids
+                )
 
-            x, pos, fea_mask, node_mask, idx_out = self.model.prepare_graph_inputs(
-                x, pos, batch
-            )
+            x, pos, node_mask, idx_out = self._prepare_graph_inputs(x, pos, batch)
 
-            x_c, beta = self.model(x, pos, fea_mask, node_mask)
+            x_c, beta = self.model(x, pos, node_mask)
 
             x_c = reorder_from_graph_batches(x_c, idx_out)
             beta = reorder_from_graph_batches(beta, idx_out)
@@ -290,10 +294,8 @@ class BaseObjectCondensationTrainer(BaseTrainer):
                 batch = self.model.get_batch_vector(x, getattr(data, "batch", None))
                 object_ids = create_unique_object_ids(y, batch, noise_idx)
 
-                x, pos, fea_mask, node_mask, idx_out = self.model.prepare_graph_inputs(
-                    x, pos, batch
-                )
-                x_c, beta = self.model(x, pos, fea_mask, node_mask)
+                x, pos, node_mask, idx_out = self._prepare_graph_inputs(x, pos, batch)
+                x_c, beta = self.model(x, pos, node_mask)
 
                 x_c = reorder_from_graph_batches(x_c, idx_out)
                 beta = reorder_from_graph_batches(beta, idx_out)
@@ -348,14 +350,13 @@ class BaseObjectCondensationTrainer(BaseTrainer):
         object_ids = create_unique_object_ids(y, batch, noise_idx)
 
         x, pos, batch, object_ids = self._apply_downsampling(x, pos, batch, object_ids)
-        x, pos, fea_mask, node_mask, _ = self.model.prepare_graph_inputs(x, pos, batch)
+        x, pos, node_mask, _ = self._prepare_graph_inputs(x, pos, batch)
 
         batch_size = Dim("batch_size", min=1)
         graph_size = Dim("graph_size", min=1)
         dynamic_shapes = {
             "x": {0: batch_size, 1: graph_size},
             "pos": {0: batch_size, 1: graph_size},
-            "fea_mask": {0: batch_size, 1: graph_size},
             "node_mask": {0: batch_size, 1: graph_size},
         }
 
@@ -364,28 +365,12 @@ class BaseObjectCondensationTrainer(BaseTrainer):
 
         torch.onnx.export(
             self.model,
-            (x, pos, fea_mask, node_mask),
+            (x, pos, node_mask),
             str(pth),
             dynamo=True,
             dynamic_shapes=dynamic_shapes,
-            input_names=["x", "pos", "fea_mask", "node_mask"],
+            input_names=["x", "pos", "node_mask"],
             verify=True,
             report=True,
             artifacts_dir=str(artifacts_dir),
         )
-
-
-class PulseOCTrainer(BaseObjectCondensationTrainer):
-    """
-    Trainer for object condensation on simulated data. Assumes input features are packed as (Energy, time) pairs for pulses.
-    """
-
-    pass
-
-
-class WaveformOCTrainer(BaseObjectCondensationTrainer):
-    """
-    Trainer for object condensation for waveform data. Assumes input features are waveforms of shape [N, L], where N is number of nodes and L is waveform length. Pre-processes waveforms based on VME configuration, e.g. by subtracting pedestal values.
-    """
-
-    pass
