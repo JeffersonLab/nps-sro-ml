@@ -1,40 +1,14 @@
-import pathlib
-import torch
 import logging
-from typing import Optional
-from torch.utils.data import Dataset as TorchDataset
+import pathlib
+from typing import Any, Optional, Protocol, Literal
+
+import numpy as np
+import torch
+
 from base.dataloader import BaseDataLoader
-from utils.utils import get_logger
 from utils.graph import reindex_edge_index
-
-try:
-    from torch_geometric.data import Dataset, Data
-except ImportError:
-    class Dataset(TorchDataset):
-        """Minimal fallback Dataset compatible with the project's usage."""
-
-        def __init__(self, *args, **kwargs):
-            super().__init__()
-
-        def __len__(self):
-            return self.len()
-
-        def __getitem__(self, idx):
-            return self.get(idx)
-
-    class Data:
-        """Minimal fallback data container matching the attributes used downstream."""
-
-        def __init__(self, **kwargs):
-            for key, value in kwargs.items():
-                setattr(self, key, value)
-
-        def to(self, device):
-            for key, value in self.__dict__.items():
-                if isinstance(value, torch.Tensor):
-                    setattr(self, key, value.to(device))
-            return self
-
+from utils.utils import get_logger
+from base.dataloader import Dataset, Data  # pyg if available, else torch
 
 NTIME = 110
 NCOLS = 30
@@ -53,61 +27,93 @@ def get_position_from_node_index(node_idx: int) -> tuple[int, int]:
     return row_idx, col_idx
 
 
-class NPSDataset(Dataset):
-    """
-    Dataset class for NPS SRO data stored in PyTorch Geometric format. The class is designed to load .pt files containing pre-processed graph data with node features representing waveforms from detector channels, see `unpack` method for details.
-    """
+class _NPSDataSource(Protocol):
+    paths: list[pathlib.Path]
 
-    def __init__(
-        self,
-        paths: Optional[list[str | pathlib.Path]] = None,
-        data_dir: Optional[pathlib.Path | str] = None,
-        logger: Optional[logging.Logger] = None,
-        max_files: Optional[int] = None,
-        use_edges: bool = False,
-    ):
-        """
-        Initialize NPSDataset, forces `transform`, `pre_transform`, and `pre_filter` to be None. If you want to apply any transformations or filtering, do it before initializing the dataset. Implementing those functionalities in this class lead to confusion. For instance, the `processed_file_names` is expected to be known beforehand, which is not possible if `pre_filter` skips some samples.
-        """
-        self.logger = get_logger("NPSDataset") if logger is None else logger
+    def len(self) -> int: ...
+    def load(self, idx: int) -> Any: ...
+    def to_tensors(self, raw: Any) -> dict[str, torch.Tensor]: ...
 
-        if paths is None and data_dir is None:
-            raise ValueError("Either 'paths' or 'data_dir' must be provided.")
+    @staticmethod
+    def glob_paths(data_dir, max_files=None) -> list[pathlib.Path]: ...
+    @staticmethod
+    def validate_path(path: pathlib.Path) -> bool: ...
 
-        self.paths: list[pathlib.Path] = []
-        max_files = max_files if max_files is not None else len(paths)
-        if paths is None:
-            data_dir = pathlib.Path(data_dir)
-            self.logger.info(f"Scanning for .pt files under {data_dir}")
+    def validate_data(self, tensors: dict[str, torch.Tensor]) -> Any:
 
-            iterator = data_dir.glob("*.pt")
-            for pth in iterator:
-                if len(self.paths) >= max_files:
-                    break
-                if self._validate_file(pth):
-                    self.paths.append(pth)
-                else:
-                    self.logger.warning(f"Invalid data file skipped: {pth}")
+        x = tensors["x"]
+        edge_index = tensors["edge_index"]
+        edge_attr = tensors["edge_attr"]
+        pos = tensors["pos"]
+        y = tensors["y"]
 
-            self.logger.info(f"Loading data files from directory: {data_dir}")
+        if x.ndim != 2:
+            raise ValueError(
+                f"Expected features to have shape [num_nodes, num_features], got {x.shape}."
+            )
 
-        else:
-            input_paths = [pathlib.Path(p) for p in paths][:max_files]
-            for pth in input_paths:
-                if self._validate_file(pth):
-                    self.paths.append(pth)
-                else:
-                    self.logger.warning(f"Invalid data file skipped: {pth}")
+        if edge_index.ndim != 2 or edge_index.shape[0] != 2:
+            raise ValueError(
+                f"Expected edge index to have shape [2, num_edges], got {edge_index.shape}."
+            )
 
-        if len(self.paths) == 0:
-            raise RuntimeError("No valid .pt files found.")
+        if edge_attr is not None and edge_attr.ndim != 2:
+            raise ValueError(
+                f"Expected edge attributes to have shape [num_edges, num_edge_attributes], got {edge_attr.shape}."
+            )
 
-        root = self.paths[0].parent / ".pyg"
-        self.use_edges = use_edges
-        super().__init__(root=root, transform=None, pre_transform=None, pre_filter=None)
+        if pos.ndim != 2 or pos.shape[1] != 2:
+            raise ValueError(
+                f"Expected geometry to have shape [num_nodes, 2], got {pos.shape}."
+            )
 
-    def _validate_file(self, path: pathlib.Path) -> bool:
-        """Validate if the given file is a valid .pt data file."""
+        # if y.ndim != 1:
+        #     raise ValueError(
+        #         f"Expected targets to have shape [num_nodes], got {y.shape}."
+        #     )
+
+    @classmethod
+    def from_data_dir(cls, data_dir, max_files=None, **kwargs):
+        paths = cls.glob_paths(data_dir, max_files=max_files)
+        paths = [p for p in paths if cls.validate_path(p)]
+        return cls(paths=paths, **kwargs)
+
+
+class _TorchSource(_NPSDataSource):
+    def __init__(self, paths: list[pathlib.Path], max_files: Optional[int] = None):
+        paths = list(filter(self.validate_path, paths))
+
+        if max_files is not None and len(paths) > max_files:
+            paths = paths[:max_files]
+        self.paths = paths
+
+    def len(self) -> int:
+        return len(self.paths)
+
+    def load(self, idx: int) -> tuple[torch.Tensor, ...]:
+        return torch.load(self.paths[idx], weights_only=False)
+
+    def to_tensors(self, raw: Any) -> dict[str, torch.Tensor]:
+        num_nodes, _ = raw[0].shape
+        edge_index = reindex_edge_index(raw[1], torch.arange(num_nodes))
+
+        return {
+            "x": raw[0],
+            "edge_index": edge_index,
+            "edge_attr": raw[2],
+            "y": raw[3],
+            "pos": raw[4],
+        }
+
+    @staticmethod
+    def glob_paths(data_dir, max_files: Optional[int] = None) -> list[pathlib.Path]:
+        paths = sorted(data_dir.glob("*.pt"))
+        if max_files is not None:
+            paths = paths[:max_files]
+        return paths
+
+    @staticmethod
+    def validate_path(path: pathlib.Path) -> bool:
         return (
             path.suffix == ".pt"
             and path.is_file()
@@ -115,127 +121,197 @@ class NPSDataset(Dataset):
             and path.stat().st_size > 0
         )
 
+
+class _NpySource(_NPSDataSource):
+
+    REQUIRED_FILES = (
+        "waveforms.npy",
+        "hits.npy",
+        "geometry.npy",
+        "edge_index.npy",
+        "clusters.npy",
+    )
+
+    def __init__(
+        self,
+        paths: list[pathlib.Path],
+        max_files: Optional[int] = None,
+        feature_mode: Literal["waveform", "hit"] = "waveform",
+    ):
+        self.paths = list(filter(self.validate_path, paths))
+        if max_files is not None and len(self.paths) > max_files:
+            self.paths = self.paths[:max_files]
+
+        self.feature_mode = feature_mode
+
+    def len(self) -> int:
+        return len(self.paths)
+
+    def load(self, idx: int) -> Any:
+        event_dir = self.paths[idx]
+        waveforms = np.load(event_dir / "waveforms.npy")
+        hits = np.load(event_dir / "hits.npy")
+        geometry = np.load(event_dir / "geometry.npy")
+        edge_index = np.load(event_dir / "edge_index.npy")
+        clusters = np.load(event_dir / "clusters.npy")
+        return waveforms, hits, geometry, edge_index, clusters
+
+    def to_tensors(self, raw: Any) -> dict[str, torch.Tensor]:
+
+        waveforms, hits, geometry, edge_index, clusters = raw
+
+        pos = torch.as_tensor(geometry, dtype=torch.float32)
+
+        if self.feature_mode == "waveform":
+            x = torch.as_tensor(
+                waveforms,
+                dtype=torch.float32,
+            )
+        else:
+            x = torch.as_tensor(hits, dtype=torch.float32)
+
+        y = torch.as_tensor(clusters, dtype=torch.long)
+
+        edge_index = torch.as_tensor(edge_index, dtype=torch.long)
+        if edge_index.numel() == 0:
+            edge_index = edge_index.reshape(2, 0)
+        else:
+            # To Do : include hit id during data generation to allow re-indexing of edge_index
+            # hit_ids should have the same order as pos and y.
+            # edge_index = reindex_edge_index(edge_index, hit_ids))
+            pass
+
+        data = {
+            "x": x,
+            "edge_index": edge_index,
+            "edge_attr": None,
+            "y": y,
+            "pos": pos,
+        }
+        if self.feature_mode == "waveform":
+            data["hits"] = torch.as_tensor(hits, dtype=torch.float32)
+        elif self.feature_mode == "hit":
+            data["waveforms"] = torch.as_tensor(waveforms, dtype=torch.float32)
+        return data
+
+    @staticmethod
+    def glob_paths(
+        data_dir: pathlib.Path, max_files: Optional[int] = None
+    ) -> list[pathlib.Path]:
+        paths = sorted([p for p in data_dir.iterdir() if p.is_dir()])
+        if max_files is not None:
+            paths = paths[:max_files]
+        return paths
+
+    @staticmethod
+    def validate_path(path: pathlib.Path) -> bool:
+        if not path.is_dir():
+            return False
+        for filename in _NpySource.REQUIRED_FILES:
+            file_path = path / filename
+            if (
+                not file_path.exists()
+                or not file_path.is_file()
+                or file_path.stat().st_size == 0
+            ):
+                return False
+        return True
+
+
+class NPSDataset(Dataset):
+    def __init__(
+        self,
+        source: Literal["torch", "npy"] = "npy",
+        paths: Optional[list[str | pathlib.Path]] = None,
+        data_dir: Optional[pathlib.Path | str] = None,
+        logger: Optional[logging.Logger] = None,
+        max_files: Optional[int] = None,
+        metadata: Optional[dict] = None,
+        **kwargs,
+    ):
+
+        self.logger = get_logger("NPSDataset") if logger is None else logger
+        if paths is None and data_dir is None:
+            raise ValueError("Either 'paths' or 'data_dir' must be provided.")
+        elif data_dir is not None:
+            data_dir = pathlib.Path(data_dir)
+
+        self.handler = self._build_handler(
+            source, paths=paths, data_dir=data_dir, max_files=max_files, **kwargs
+        )
+        self.paths = self.handler.paths
+
+        if len(self.paths) == 0:
+            raise RuntimeError("No valid files found.")
+
+        metadata_ = {
+            "ncols": NCOLS,  # Number of columns in the detector grid
+            "nrows": NROWS,  # Number of rows in the detector grid
+            "nsamples": NTIME,  # Number of time samples in each waveform
+        }
+        if metadata is not None:
+            metadata_.update(metadata)
+
+        for key, value in metadata_.items():
+            setattr(self, f"{key}_", value)
+
+        root = self.paths[0].parent / ".pyg"
+        super().__init__(root=root, transform=None, pre_transform=None, pre_filter=None)
+
+    def _build_handler(
+        self,
+        source: Literal["torch", "npy"] = "npy",
+        paths: Optional[list[str | pathlib.Path]] = None,
+        data_dir: Optional[pathlib.Path | str] = None,
+        max_files: Optional[int] = None,
+        **kwargs,
+    ):
+        if paths is not None:
+            paths = [pathlib.Path(p) for p in paths]
+
+        if source == "torch":
+            if paths is not None:
+                handler = _TorchSource(paths=paths, max_files=max_files, **kwargs)
+            elif data_dir is not None:
+                handler = _TorchSource.from_data_dir(
+                    data_dir, max_files=max_files, **kwargs
+                )
+        elif source == "npy":
+            if paths is not None:
+                handler = _NpySource(paths=paths, **kwargs)
+            elif data_dir is not None:
+                handler = _NpySource.from_data_dir(
+                    data_dir, max_files=max_files, **kwargs
+                )
+        else:
+            raise ValueError(f"Unknown source type: {source}")
+
+        return handler
+
+    def len(self):
+        return self.handler.len()
+
+    def get(self, idx):
+        raw = self.handler.load(idx)
+        tensors = self.handler.to_tensors(raw)
+        self.handler.validate_data(tensors)
+        return Data(**tensors)
+
     @property
     def raw_file_names(self):
-        """Returns an empty list. Included to satisfy PyG Dataset requirements."""
         return []
 
     @property
     def processed_file_names(self):
-        """Returns an empty list. Included to satisfy PyG Dataset requirements."""
         return []
 
     def download(self):
-        """Skip downloading as data are assumed to be locally available."""
         self.logger.info(
             f"Skip downloading as data are locally available at {self.paths[0].parent}."
         )
 
     def process(self):
-        """Skip processing as data are assumed to be pre-processed."""
         self.logger.info("Skip processing as data are pre-processed.")
-
-    def _unpack_data(
-        self, data: tuple[torch.Tensor, ...]
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Unpack raw data into components.
-
-        The expected structure of the input data tuple is as follows:
-        0: node_features
-        1: edge_index
-        2: edge_features
-        3: node_targets
-        4: node_positions
-
-        Parameters
-        ----------
-        data : tuple[torch.Tensor, ...]
-            Raw data tuple loaded from .pt file
-        """
-        node_features = data[0]  # [num_nodes][num_node_features]
-        edge_index = data[1]  # [2][num_edges]
-        edge_attr = data[2]  # [num_edges][num_edge_attributes]
-        node_targets = data[3]  # [num_nodes][num_node_targets]
-        node_positions = data[4]  # [num_nodes][2]
-        return node_features, edge_index, edge_attr, node_targets, node_positions
-
-    def _build_graph(self, data: tuple[torch.Tensor, ...]) -> Data:
-        """
-        Build PyG Data object from unpacked data.
-
-        Parameters
-        ----------
-        data : tuple[torch.Tensor, ...]
-            Raw data tuple loaded from .pt file
-
-        Returns
-        -------
-        Data
-            PyG Data object containing graph information.
-        """
-        node_features, edge_index, edge_attr, node_targets, node_positions = (
-            self._unpack_data(data)
-        )
-
-        N, F = node_features.shape
-
-        if N != node_targets.shape[0]:
-            raise ValueError(
-                f"Expected nodeFeatures to have shape ({node_targets.shape[0]}, {F}), but got ({N}, {F})"
-            )
-        if N != node_positions.shape[0]:
-            raise ValueError(
-                f"Expected nodeFeatures to have shape ({node_positions.shape[0]}, {F}), but got ({N}, {F})"
-            )
-
-        if edge_index.shape[0] != 2:
-            raise ValueError(
-                f"Expected edgeIndex to have shape (2, E), but got {edge_index.shape}"
-            )
-
-        if edge_attr.shape[0] != edge_index.shape[1]:
-            raise ValueError(
-                f"Expected edgeAttr to have shape (E, num_edge_attributes), but got {edge_attr.shape}"
-            )
-
-        if self.use_edges:
-            edge_index = reindex_edge_index(edge_index, torch.arange(N))
-        else:
-            edge_index = None
-            edge_attr = None
-
-        return Data(
-            x=node_features.float(),
-            edge_index=edge_index,
-            edge_attr=edge_attr,
-            y=node_targets.long(),
-            pos=node_positions.float(),
-        )
-
-    def len(self) -> int:
-        """Return the number of data samples in the dataset."""
-        return len(self.paths)
-
-    def get(self, idx: int) -> Data:
-        """Get the data sample at the specified index."""
-        data = torch.load(self.paths[idx], weights_only=False)
-        return self._build_graph(data)
-
-    @property
-    def ncols_(self) -> int:
-        """Return number of columns in the NPS detector grid."""
-        return NCOLS
-
-    @property
-    def nrows_(self) -> int:
-        """Return number of rows in the NPS detector grid."""
-        return NROWS
-
-    @property
-    def paths_(self) -> list[pathlib.Path]:
-        """Return list of data file paths in the dataset."""
-        return self.paths
 
 
 class NPSDataLoader(BaseDataLoader):
@@ -243,7 +319,7 @@ class NPSDataLoader(BaseDataLoader):
 
     def __init__(
         self,
-        dataset: Optional[Dataset] = None,
+        dataset: Optional[NPSDataset] = None,
         shuffle: bool = True,
         batch_size: int = 32,
         validation_split: float = 0.0,
@@ -251,24 +327,6 @@ class NPSDataLoader(BaseDataLoader):
         use_torch_loader: bool = False,
         **kwargs,
     ):
-        """
-        Initialize NPSDataLoader, which wraps around a NPSDataset instance.
-
-        Parameters
-        ----------
-        dataset : Optional[Dataset]
-            Pre-initialized dataset. If None, dataset will be initialized using data_paths, by default None
-        logger : Optional[logging.Logger]
-            logging for Dataset class
-        shuffle : bool
-            Whether to shuffle the dataset, by default True
-        batch_size : int
-            Size of each batch, by default 32
-        validation_split : float
-            Fraction of data to use for validation, by default 0.0
-        num_workers : int
-            Number of workers for data loading, by default 1
-        """
         if dataset is None:
             dataset = NPSDataset(**kwargs)
         super().__init__(
@@ -281,9 +339,6 @@ class NPSDataLoader(BaseDataLoader):
         )
 
     def __getattr__(self, name: str) -> any:
-        """
-        Dynamically forward attribute access to the underlying dataset. This allows accessing any dataset attribute/property through the dataloader.
-        """
         try:
             return getattr(self.dataset, name)
         except AttributeError:
