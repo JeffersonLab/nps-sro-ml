@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 from torch.utils.data import DataLoader as TorchDataLoader
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset as TorchDataset
 from torch.utils.data._utils.collate import default_collate
 from torch.utils.data.sampler import SubsetRandomSampler
 from typing import Any, Optional, Union
@@ -9,12 +9,40 @@ from typing import Any, Optional, Union
 try:
     from torch_geometric.data import Batch as PygBatch
     from torch_geometric.data import Dataset as PygDataset
+    from torch_geometric.data import Data as PygData
 
+    Data = PygData
     Dataset = PygDataset
     HAS_PYG = True
+
 except ImportError:
     PygBatch = None
     HAS_PYG = False
+
+    class Dataset(TorchDataset):
+        """Minimal fallback Dataset compatible with the project's usage."""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+
+        def __len__(self):
+            return self.len()
+
+        def __getitem__(self, idx):
+            return self.get(idx)
+
+    class Data:
+        """Minimal fallback data container matching the attributes used downstream."""
+
+        def __init__(self, **kwargs):
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+
+        def to(self, device):
+            for key, value in self.__dict__.items():
+                if isinstance(value, torch.Tensor):
+                    setattr(self, key, value.to(device))
+            return self
 
 
 def _as_tensor(value: Any) -> torch.Tensor:
@@ -58,13 +86,7 @@ def _torch_graph_collate(batch: list[Any]) -> Any:
     if "x" not in first_keys:
         return default_collate(batch)
 
-    keys = sorted(
-        {
-            key
-            for sample in batch
-            for key in _sample_keys(sample)
-        }
-    )
+    keys = sorted({key for sample in batch for key in _sample_keys(sample)})
 
     node_counts = [_as_tensor(sample.x).shape[0] for sample in batch]
     batch_idx = [
@@ -168,9 +190,7 @@ class BaseDataLoader(TorchDataLoader):
             "batch_size": batch_size,
             "num_workers": num_workers,
             "collate_fn": (
-                _torch_graph_collate
-                if self.use_torch_loader
-                else _pyg_graph_collate
+                _torch_graph_collate if self.use_torch_loader else _pyg_graph_collate
             ),
         }
 
