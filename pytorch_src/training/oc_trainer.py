@@ -65,6 +65,10 @@ def create_sample_mask(
     return mask
 
 
+def apply_mask(mask, *tensors):
+    return [t[mask] for t in tensors]
+
+
 class ObjectCondensationTrainer(BaseTrainer):
     """
     Base Object Condensation Trainer class. Implements the common training loop and loss computation for object condensation, while allowing for flexible input feature formats and pre-processing steps through methods that can be overridden by subclasses.
@@ -147,59 +151,6 @@ class ObjectCondensationTrainer(BaseTrainer):
 
         return l_attr, l_repul, l_coward, l_noise
 
-    def _apply_downsampling(
-        self,
-        x: torch.Tensor,
-        pos: torch.Tensor,
-        batch: torch.Tensor,
-        object_ids: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Apply down sampling to the input tensors. This function should be called right after the data is retrieved from the dataloader, i.e. when the input tensors are still with shape [N,D].
-
-        Parameters
-        ----------
-        x : torch.Tensor
-            Input features, shape [N, D].
-        pos : torch.Tensor
-            Node positions, shape [N, pos_dim].
-        batch : torch.Tensor
-            Tensor of shape [N] indicating the graph index for each node in a batched setting.
-        object_ids : torch.Tensor
-            Tensor of shape [N] containing the object ID for each node.
-
-        Return
-        ------
-        Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
-            A tuple containing the downsampled x, pos, batch, and object_ids tensors, all with shape [N', D], [N', pos_dim], [N'], and [N'] respectively, where N' <= N depending on the downsampling applied.
-        """
-        mask_scale = self.config.get("mask_scale", None)
-        noise_idx = self.config.get("noise_idx", -1)
-
-        mask = create_sample_mask(
-            object_ids,
-            batch=batch,
-            scale=mask_scale,
-            bkg_id=noise_idx,
-        )
-
-        x = x[mask]
-        pos = pos[mask]
-        object_ids = object_ids[mask]
-
-        if batch is not None:
-            batch = batch[mask]
-
-        return x, pos, batch, object_ids
-
-    def _prepare_graph_inputs(
-        self, x: torch.Tensor, pos: torch.Tensor, batch: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[torch.Tensor]]:
-        x_out, idx_out, node_mask = pack_to_graph_batches(x, [pos], batch=batch)
-        x_graph = x_out[0]
-        pos_graph = x_out[1]
-        return x_graph, pos_graph, node_mask, idx_out
-
     def _preprocess(self, data):
         return data
 
@@ -209,6 +160,7 @@ class ObjectCondensationTrainer(BaseTrainer):
         total_loss = 0.0
 
         noise_idx = self.config.get("noise_idx", -1)
+        downsample = self.config.get("apply_downsample", False)
         for batch_idx, data in enumerate(self.dataloader):
 
             self.optimizer.zero_grad()
@@ -224,12 +176,18 @@ class ObjectCondensationTrainer(BaseTrainer):
             )
             object_ids = create_unique_object_ids(y, batch, noise_idx)
 
-            if self.config.get("apply_downsample"):
-                x, pos, batch, object_ids = self._apply_downsampling(
-                    x, pos, batch, object_ids
+            if downsample:
+                mask_scale = self.config.get("mask_scale", 1.0)
+                mask = create_sample_mask(
+                    object_ids,
+                    batch=batch,
+                    scale=mask_scale,
+                    bkg_id=noise_idx,
                 )
+                x, pos, batch, object_ids = apply_mask(mask, x, pos, batch, object_ids)
 
-            x, pos, node_mask, idx_out = self._prepare_graph_inputs(x, pos, batch)
+            outs, idx_out, node_mask = pack_to_graph_batches(x, [pos], batch=batch)
+            x, pos = outs[0], outs[1]
             x_c, beta = self.model(x, pos, node_mask)
 
             x_c = reorder_from_graph_batches(x_c, idx_out)
@@ -296,7 +254,8 @@ class ObjectCondensationTrainer(BaseTrainer):
                 )
                 object_ids = create_unique_object_ids(y, batch, noise_idx)
 
-                x, pos, node_mask, idx_out = self._prepare_graph_inputs(x, pos, batch)
+                outs, idx_out, node_mask = pack_to_graph_batches(x, [pos], batch=batch)
+                x, pos = outs[0], outs[1]
                 x_c, beta = self.model(x, pos, node_mask)
 
                 x_c = reorder_from_graph_batches(x_c, idx_out)
@@ -352,11 +311,8 @@ class ObjectCondensationTrainer(BaseTrainer):
             else torch.zeros(x.shape[0], dtype=torch.long, device=x.device)
         )
 
-        noise_idx = self.config.get("noise_idx", -1)
-        object_ids = create_unique_object_ids(y, batch, noise_idx)
-
-        x, pos, batch, object_ids = self._apply_downsampling(x, pos, batch, object_ids)
-        x, pos, node_mask, _ = self._prepare_graph_inputs(x, pos, batch)
+        outs, idx_out, node_mask = pack_to_graph_batches(x, [pos], batch=batch)
+        x, pos = outs[0], outs[1]
 
         batch_size = Dim("batch_size", min=1)
         graph_size = Dim("graph_size", min=1)
