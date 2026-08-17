@@ -230,7 +230,6 @@ class ObjectCondensationTrainer(BaseTrainer):
                 )
 
             x, pos, node_mask, idx_out = self._prepare_graph_inputs(x, pos, batch)
-
             x_c, beta = self.model(x, pos, node_mask)
 
             x_c = reorder_from_graph_batches(x_c, idx_out)
@@ -283,15 +282,18 @@ class ObjectCondensationTrainer(BaseTrainer):
         total_loss = 0.0
 
         noise_idx = self.config.get("noise_idx", -1)
-
         with torch.no_grad():
             for batch_idx, data in enumerate(self.valid_dataloader):
                 data = data.to(self.device)
 
-                x = self.model.preprocess_features(data)
-                pos = data.pos
+                x = data.x
                 y = data.y.squeeze(-1).long()
-                batch = self.model.get_batch_vector(x, getattr(data, "batch", None))
+                pos = data.pos
+                batch = (
+                    data.batch
+                    if hasattr(data, "batch")
+                    else torch.zeros(x.shape[0], dtype=torch.long, device=x.device)
+                )
                 object_ids = create_unique_object_ids(y, batch, noise_idx)
 
                 x, pos, node_mask, idx_out = self._prepare_graph_inputs(x, pos, batch)
@@ -342,9 +344,13 @@ class ObjectCondensationTrainer(BaseTrainer):
         data = next(iter(self.dataloader))
         data = data.to(self.device)
         pos = data.pos
-        x = self.model.preprocess_features(data)
+        x = data.x
         y = data.y.squeeze(-1).long()
-        batch = self.model.get_batch_vector(x, getattr(data, "batch", None))
+        batch = (
+            data.batch
+            if hasattr(data, "batch")
+            else torch.zeros(x.shape[0], dtype=torch.long, device=x.device)
+        )
 
         noise_idx = self.config.get("noise_idx", -1)
         object_ids = create_unique_object_ids(y, batch, noise_idx)
@@ -357,7 +363,7 @@ class ObjectCondensationTrainer(BaseTrainer):
         dynamic_shapes = {
             "x": {0: batch_size, 1: graph_size},
             "pos": {0: batch_size, 1: graph_size},
-            "node_mask": {0: batch_size, 1: graph_size},
+            "mask": {0: batch_size, 1: graph_size},
         }
 
         artifacts_dir = self.checkpoint_dir / "onnx_artifacts"
@@ -369,7 +375,7 @@ class ObjectCondensationTrainer(BaseTrainer):
             str(pth),
             dynamo=True,
             dynamic_shapes=dynamic_shapes,
-            input_names=["x", "pos", "node_mask"],
+            input_names=["x", "pos", "mask"],
             verify=True,
             report=True,
             artifacts_dir=str(artifacts_dir),
