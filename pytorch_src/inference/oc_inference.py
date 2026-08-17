@@ -1,4 +1,4 @@
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
 
 import pandas as pd
@@ -7,6 +7,7 @@ import torch
 from utils.graph import (
     create_unique_object_ids,
     reorder_from_graph_batches,
+    pack_to_graph_batches,
 )
 
 
@@ -24,153 +25,99 @@ class OcInferenceHyperparameters:
         return cls(**(hyperparameters or {}))
 
 
+from dataclasses import dataclass, field
+from typing import Dict, List
+import torch
+
+
 @dataclass
 class OcInferenceResults:
-    event_id: list[torch.Tensor] = field(default_factory=list)
-    cluster_ids: list[torch.Tensor] = field(default_factory=list)
-    min_d: list[torch.Tensor] = field(default_factory=list)
-    beta: list[torch.Tensor] = field(default_factory=list)
-    object_ids: list[torch.Tensor] = field(default_factory=list)
-    det_x: list[torch.Tensor] = field(default_factory=list)
-    det_y: list[torch.Tensor] = field(default_factory=list)
-    x_c: dict[str, list[torch.Tensor]] = field(default_factory=dict)
-    pulse_fields: dict[str, list[torch.Tensor]] = field(default_factory=dict)
+    """
+    Container for inference results.
 
-    def append_graph(
+    Each entry corresponds to one event and stores the original hit-level
+    inputs together with the inferred ownership information.
+    """
+
+    # original data
+    event_id: List[torch.Tensor] = field(default_factory=list)
+    x: List[torch.Tensor] = field(default_factory=list)
+    pos: List[torch.Tensor] = field(default_factory=list)
+    truth_ids: List[torch.Tensor] = field(default_factory=list)
+
+    # inference
+    min_d: List[torch.Tensor] = field(default_factory=list)
+    beta: List[torch.Tensor] = field(default_factory=list)
+    x_c: List[torch.Tensor] = field(default_factory=list)
+    object_ids: List[torch.Tensor] = field(default_factory=list)
+
+    def append(
         self,
-        *,
-        event_id: int,
-        cluster_ids: torch.Tensor,
+        event_id: torch.Tensor,
+        x: torch.Tensor,
+        pos: torch.Tensor,
+        truth_ids: torch.Tensor,
         min_d: torch.Tensor,
         beta: torch.Tensor,
         x_c: torch.Tensor,
         object_ids: torch.Tensor,
-        pos: torch.Tensor,
-        pulse_cluster_ids: Optional[torch.Tensor] = None,
-        pulse_min_d: Optional[torch.Tensor] = None,
-        pulse_beta: Optional[torch.Tensor] = None,
-        pulse_score: Optional[torch.Tensor] = None,
-        pulse_object_ids: Optional[torch.Tensor] = None,
-        pulse_x_c: Optional[torch.Tensor] = None,
     ) -> None:
-        nb = cluster_ids.numel()
-        self.event_id.append(torch.full((nb,), event_id, dtype=torch.long).cpu())
-        self.cluster_ids.append(cluster_ids.view(-1).cpu())
-        self.min_d.append(min_d.view(-1).cpu())
-        self.beta.append(beta.view(-1).cpu())
-        self.object_ids.append(object_ids.view(-1).cpu())
-        self.det_x.append(pos[:, 0].view(-1).cpu())
-        self.det_y.append(pos[:, 1].view(-1).cpu())
+        self.event_id.append(event_id)
+        self.x.append(x)
+        self.pos.append(pos)
+        self.truth_ids.append(truth_ids)
 
-        for dim in range(x_c.size(1)):
-            key = f"x_c_{dim}"
-            self.x_c.setdefault(key, []).append(x_c[:, dim].view(-1).cpu())
+        self.min_d.append(min_d)
+        self.x_c.append(x_c)
+        self.beta.append(beta)
+        self.object_ids.append(object_ids)
 
-        if pulse_cluster_ids is not None:
-            self._append_slot_tensor(self.pulse_fields, "pulse_cluster_ids", pulse_cluster_ids)
-        if pulse_min_d is not None:
-            self._append_slot_tensor(self.pulse_fields, "pulse_min_d", pulse_min_d)
-        if pulse_beta is not None:
-            self._append_slot_tensor(self.pulse_fields, "pulse_beta", pulse_beta)
-        if pulse_score is not None:
-            self._append_slot_tensor(self.pulse_fields, "pulse_score", pulse_score)
-        if pulse_object_ids is not None:
-            self._append_slot_tensor(self.pulse_fields, "pulse_object_ids", pulse_object_ids)
-        if pulse_x_c is not None:
-            self._append_slot_tensor(self.pulse_fields, "pulse_x_c", pulse_x_c)
+    def to_dict(self):
+        if not self.x:
+            return {}
 
-    def _append_slot_tensor(
-        self,
-        store: dict[str, list[torch.Tensor]],
-        prefix: str,
-        tensor: torch.Tensor,
-    ) -> None:
-        if tensor.ndim == 2:
-            for slot in range(tensor.size(1)):
-                key = f"{prefix}_{slot}"
-                store.setdefault(key, []).append(tensor[:, slot].view(-1).cpu())
-            return
-
-        if tensor.ndim == 3:
-            for slot in range(tensor.size(1)):
-                for dim in range(tensor.size(2)):
-                    key = f"{prefix}_{slot}_{dim}"
-                    store.setdefault(key, []).append(tensor[:, slot, dim].view(-1).cpu())
-            return
-
-        raise ValueError(
-            f"Expected slot tensor with ndim 2 or 3, got shape {tuple(tensor.shape)}."
-        )
-
-    def to_dataframe(self) -> pd.DataFrame:
-        if not self.event_id:
-            columns = [
-                "event_id",
-                "cluster_ids",
-                "min_d",
-                "beta",
-                "object_ids",
-                "det_x",
-                "det_y",
+        event_id = torch.cat(
+            [
+                (
+                    torch.as_tensor(value).reshape(-1).repeat(x.shape[0])
+                    if torch.as_tensor(value).numel() == 1
+                    else torch.as_tensor(value).reshape(-1)
+                )
+                for value, x in zip(self.event_id, self.x)
             ]
-            return pd.DataFrame(columns=columns)
-
-        result_tensors = {}
-        for key, values in asdict(self).items():
-            if key in {"x_c", "pulse_fields"}:
-                continue
-            result_tensors[key] = torch.cat(values, dim=0).numpy()
-        result_tensors.update(
-            {key: torch.cat(values, dim=0).numpy() for key, values in self.x_c.items()}
         )
-        result_tensors.update(
-            {
-                key: torch.cat(values, dim=0).numpy()
-                for key, values in self.pulse_fields.items()
-            }
-        )
-        return pd.DataFrame(result_tensors)
+        x = torch.cat(self.x, dim=0)
+        x_c = torch.cat(self.x_c, dim=0)
+        pos = torch.cat(self.pos, dim=0)
+
+        return {
+            "event_id": event_id.detach().cpu().numpy(),
+            "truth_ids": torch.cat(self.truth_ids).detach().cpu().flatten().numpy(),
+            "min_d": torch.cat(self.min_d).detach().cpu().flatten().numpy(),
+            "beta": torch.cat(self.beta).detach().cpu().flatten().numpy(),
+            "object_ids": torch.cat(self.object_ids).detach().cpu().flatten().numpy(),
+            **{
+                f"x_{idx}": x[:, idx].detach().cpu().numpy()
+                for idx in range(x.shape[1])
+            },
+            **{
+                f"x_c_{idx}": x_c[:, idx].detach().cpu().numpy()
+                for idx in range(x_c.shape[1])
+            },
+            **{
+                f"pos_{idx}": pos[:, idx].detach().cpu().numpy()
+                for idx in range(pos.shape[1])
+            },
+        }
+
+    def to_df(self):
+        return pd.DataFrame(self.to_dict())
+
+    def to_csv(self, filename):
+        self.to_df().to_csv(filename, index=False)
 
 
-def normalize_y_object_ids(
-    y: torch.Tensor,
-    batch: torch.Tensor,
-    noise_idx: int = -1,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    if y.ndim == 1:
-        y = y.unsqueeze(-1)
-    elif y.ndim == 2 and y.shape[-1] == 1:
-        pass
-    elif y.ndim > 2:
-        y = y.reshape(y.shape[0], -1)
-
-    y = y.long()
-    token_object_ids = torch.full_like(y, noise_idx)
-    for slot in range(y.shape[1]):
-        token_object_ids[:, slot] = create_unique_object_ids(
-            y[:, slot], batch, noise_idx=noise_idx
-        )
-
-    node_object_ids = torch.full(
-        (y.shape[0],),
-        noise_idx,
-        dtype=torch.long,
-        device=y.device,
-    )
-    signal_mask = token_object_ids != noise_idx
-    has_signal = signal_mask.any(dim=-1)
-    first_signal_idx = signal_mask.long().argmax(dim=-1)
-    node_object_ids[has_signal] = token_object_ids[
-        has_signal, first_signal_idx[has_signal]
-    ]
-    return node_object_ids, token_object_ids
-
-
-class BaseObjectCondensationInferencer:
-    """
-    Base OC inferencer that prepares model inputs in the same packed format used
-    by the OC trainer.
-    """
+class ObjectCondensationInferencer:
 
     def __init__(
         self,
@@ -181,36 +128,31 @@ class BaseObjectCondensationInferencer:
         self.model = model
         self.hyperparameters = hyperparameters or OcInferenceHyperparameters()
         self.config = config or {}
-        self.model.configure_input_preprocessing(self.config)
 
-    def _predict(
-        self, data: Any
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        x = self.model.preprocess_features(data)
-        pos = data.pos
-        batch = self.model.get_batch_vector(x, getattr(data, "batch", None))
+    def _infer(self, data: Any, results: OcInferenceResults, event_id: int) -> int:
 
-        x_graph, pos_graph, fea_mask, node_mask, idx_out = self.model.prepare_graph_inputs(
-            x, pos, batch
-        )
-        x_c, beta = self.model(x_graph, pos_graph, fea_mask, node_mask)
-        x_c = reorder_from_graph_batches(x_c, idx_out)
-        beta = reorder_from_graph_batches(beta, idx_out).squeeze(-1)
-        return x_c, beta, pos, batch
+        data = self._preprocess(data)
+        data = data.to(self.device)
 
-    def infer_data(
-        self,
-        data: Any,
-        results: OcInferenceResults,
-        event_id: int,
-    ) -> int:
+        x = data.x
         y = data.y.squeeze(-1).long()
-        x_c, beta, pos, batch = self._predict(data)
-        object_ids = create_unique_object_ids(
-            y,
-            batch,
-            noise_idx=self.hyperparameters.noise_idx,
+        pos = data.pos
+        batch = (
+            data.batch
+            if hasattr(data, "batch")
+            else torch.zeros(x.shape[0], dtype=torch.long, device=x.device)
         )
+
+        noise_idx = self.hyperparameters.get("noise_idx", -1)
+        truth_ids = create_unique_object_ids(y, batch, noise_idx)
+
+        outs, idx_out, node_mask = pack_to_graph_batches(x, [pos], batch=batch)
+        x, pos = outs[0], outs[1]
+        x_c, beta = self.model(x, pos, node_mask)
+
+        x_c = reorder_from_graph_batches(x_c, idx_out)
+        beta = reorder_from_graph_batches(beta, idx_out)
+        beta = beta.squeeze(-1)
 
         for b in batch.unique(sorted=True):
             b_mask = batch == b
@@ -221,182 +163,30 @@ class BaseObjectCondensationInferencer:
                 dist_thres=self.hyperparameters.dist_thres,
                 bkg_idx=self.hyperparameters.noise_idx,
             )
-            results.append_graph(
+            results.append(
                 event_id=event_id,
-                cluster_ids=cluster_ids,
+                x=x[b_mask],
+                pos=pos[b_mask],
+                truth_ids=truth_ids[b_mask],
                 min_d=min_d,
                 beta=beta[b_mask],
                 x_c=x_c[b_mask],
-                object_ids=object_ids[b_mask],
-                pos=pos[b_mask],
+                cluster_ids=cluster_ids,
             )
             event_id += 1
 
         return event_id
 
-    def infer_dataloader(self, dataloader: Any) -> OcInferenceResults:
+    def infer(self, dataloader: Any) -> OcInferenceResults:
         results = OcInferenceResults()
         event_id = 0
 
         with torch.no_grad():
             for data in dataloader:
-                data = data.to(next(self.model.parameters()).device)
-                event_id = self.infer_data(data, results, event_id)
+                data = data.to(self.model.device)
+                event_id = self._infer(data, results, event_id)
 
         return results
-
-
-class PulseOCInferencer(BaseObjectCondensationInferencer):
-    pass
-
-
-class WaveformOCInferencer(BaseObjectCondensationInferencer):
-    pass
-
-
-class MultiPulseOCInferencer(BaseObjectCondensationInferencer):
-    def _predict(
-        self,
-        data: Any,
-    ) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
-        x = self.model.preprocess_features(data)
-        pos = data.pos
-        batch = self.model.get_batch_vector(x, getattr(data, "batch", None))
-
-        x_graph, pos_graph, fea_mask, node_mask, idx_out = self.model.prepare_graph_inputs(
-            x, pos, batch
-        )
-        outputs = self.model(x_graph, pos_graph, fea_mask, node_mask)
-        outputs = {
-            key: reorder_from_graph_batches(value, idx_out)
-            for key, value in outputs.items()
-        }
-        return outputs, pos, batch
-
-    def _pool_node_outputs(
-        self,
-        outputs: dict[str, torch.Tensor],
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        pulse_score = outputs["pulse_score"]
-        pulse_beta = outputs["pulse_beta"]
-        pulse_x_c = outputs["pulse_x_c"]
-        token_mask = outputs["token_mask"]
-
-        token_weight = pulse_score * token_mask.to(pulse_score.dtype)
-        token_weight = token_weight / token_weight.sum(dim=-1, keepdim=True).clamp_min(1e-6)
-        x_c = (pulse_x_c * token_weight.unsqueeze(-1)).sum(dim=2)
-        beta = pulse_beta.max(dim=-1).values
-        return x_c, beta
-
-    def _predict_multi_object_ids(
-        self,
-        pulse_x_c: torch.Tensor,
-        pulse_beta: torch.Tensor,
-        pulse_score: torch.Tensor,
-        token_mask: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        device = pulse_beta.device
-        noise_idx = self.hyperparameters.noise_idx
-        pulse_cluster_ids = torch.full(
-            pulse_beta.shape,
-            fill_value=noise_idx,
-            dtype=torch.long,
-            device=device,
-        )
-        pulse_min_d = torch.full(
-            pulse_beta.shape,
-            fill_value=float("inf"),
-            dtype=pulse_x_c.dtype,
-            device=device,
-        )
-
-        active_mask = token_mask & (pulse_score > self.hyperparameters.pulse_score_thres)
-        if active_mask.sum() == 0:
-            return pulse_cluster_ids, pulse_min_d
-
-        cluster_ids, min_d = oc_inference_per_graph(
-            pulse_x_c[active_mask],
-            pulse_beta[active_mask],
-            beta_thres=self.hyperparameters.beta_thres,
-            dist_thres=self.hyperparameters.dist_thres,
-            bkg_idx=noise_idx,
-        )
-        pulse_cluster_ids[active_mask] = cluster_ids
-        pulse_min_d[active_mask] = min_d
-        return pulse_cluster_ids, pulse_min_d
-
-    def infer_data(
-        self,
-        data: Any,
-        results: OcInferenceResults,
-        event_id: int,
-    ) -> int:
-        outputs, pos, batch = self._predict(data)
-        x_c, beta = self._pool_node_outputs(outputs)
-        object_ids, token_object_ids = normalize_y_object_ids(
-            data.y,
-            batch,
-            noise_idx=self.hyperparameters.noise_idx,
-        )
-
-        for b in batch.unique(sorted=True):
-            b_mask = batch == b
-            cluster_ids, min_d = oc_inference_per_graph(
-                x_c[b_mask],
-                beta[b_mask],
-                beta_thres=self.hyperparameters.beta_thres,
-                dist_thres=self.hyperparameters.dist_thres,
-                bkg_idx=self.hyperparameters.noise_idx,
-            )
-            pulse_cluster_ids, pulse_min_d = self._predict_multi_object_ids(
-                outputs["pulse_x_c"][b_mask],
-                outputs["pulse_beta"][b_mask],
-                outputs["pulse_score"][b_mask],
-                outputs["token_mask"][b_mask],
-            )
-            results.append_graph(
-                event_id=event_id,
-                cluster_ids=cluster_ids,
-                min_d=min_d,
-                beta=beta[b_mask],
-                x_c=x_c[b_mask],
-                object_ids=object_ids[b_mask],
-                pos=pos[b_mask],
-                pulse_cluster_ids=pulse_cluster_ids,
-                pulse_min_d=pulse_min_d,
-                pulse_beta=outputs["pulse_beta"][b_mask],
-                pulse_score=outputs["pulse_score"][b_mask],
-                pulse_object_ids=token_object_ids[b_mask],
-                pulse_x_c=outputs["pulse_x_c"][b_mask],
-            )
-            event_id += 1
-
-        return event_id
-
-
-def build_oc_inferencer(
-    model: torch.nn.Module,
-    config: Optional[dict] = None,
-    hyperparameters: OcInferenceHyperparameters | None = None,
-) -> BaseObjectCondensationInferencer:
-    config = config or {}
-    trainer_type = config.get("trainer", {}).get("type")
-    input_type = getattr(model, "input_type", None)
-
-    if trainer_type == "MultiPulseOCTrainer":
-        return MultiPulseOCInferencer(model, hyperparameters=hyperparameters, config=config)
-
-    if trainer_type == "WaveformOCTrainer" or input_type == "waveform":
-        return WaveformOCInferencer(model, hyperparameters=hyperparameters, config=config)
-
-    if trainer_type == "PulseOCTrainer" or input_type == "pulse_set":
-        return PulseOCInferencer(model, hyperparameters=hyperparameters, config=config)
-
-    return BaseObjectCondensationInferencer(
-        model,
-        hyperparameters=hyperparameters,
-        config=config,
-    )
 
 
 def oc_inference_per_batch(
@@ -503,8 +293,12 @@ def oc_inference_per_graph(
 
     if len(seed_mask) == 0:
         return (
-            torch.full((x.size(0),), fill_value=bkg_idx, dtype=torch.long, device=x.device),
-            torch.full((x.size(0),), fill_value=float('inf'), dtype=x.dtype, device=x.device),
+            torch.full(
+                (x.size(0),), fill_value=bkg_idx, dtype=torch.long, device=x.device
+            ),
+            torch.full(
+                (x.size(0),), fill_value=float('inf'), dtype=x.dtype, device=x.device
+            ),
         )
 
     d = torch.cdist(x, x[seed_mask], p=2)  #   [N, S]
