@@ -10,10 +10,7 @@ from tqdm import tqdm
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "pytorch_src"))
 
-from inference.oc_inference import (
-    OcInferenceHyperparameters,
-    build_oc_inferencer,
-)
+from inference.oc_inference import OcInferenceResults, OcInferenceHyperparameters
 from utils.config import ConfigParser
 from utils.utils import import_attr, prepare_device
 
@@ -24,6 +21,9 @@ def main(cfg: ConfigParser):
     vdl = dl.split_validation()
 
     model_path = pathlib.Path(cfg.get("model_pth"))
+    if not model_path.exists():
+        raise FileNotFoundError(f"Model file not found: {model_path}")
+
     logger.info(f"Loading model from {model_path}")
     model = load_model(model_path)
     device, _ = prepare_device(cfg.get("n_gpu"))
@@ -32,19 +32,21 @@ def main(cfg: ConfigParser):
     model = model.to(device)
     model.eval()
 
-    hyperparams = OcInferenceHyperparameters.from_mapping(cfg.get("hyperparameters", {}))
-    inferencer = build_oc_inferencer(
+    inference_cls = cfg.init_obj("inference")
+    hyperparams = OcInferenceHyperparameters.from_mapping(cfg["inference"])
+    inferencer = inference_cls(
         model,
-        config=cfg.config,
         hyperparameters=hyperparams,
     )
-    results = inferencer.infer_dataloader(tqdm(vdl))
+    results: OcInferenceResults = inferencer.infer(tqdm(vdl))
 
-    out_dir = cfg.get("out_dir")
-    out_dir.mkdir(parents=True, exist_ok=True)
+    save_dir = pathlib.Path(cfg.get("save_dir", None))
+    if save_dir is None or not save_dir.exists():
+        save_dir = pathlib.Path(model_path.parent)
+    save_dir.mkdir(parents=True, exist_ok=True)
 
-    results_path = out_dir / "results.csv"
-    results.to_dataframe().to_csv(results_path, index=False)
+    results_path = save_dir / "results.csv"
+    results.to_csv(results_path, index=False)
     logger.info(f"Saved inference results to {results_path}")
 
 
@@ -78,11 +80,6 @@ if __name__ == "__main__":
             ["-m", "--model"],
             type=pathlib.Path,
             target="model_pth",
-        ),
-        CustomArgs(
-            ["-o", "--out_dir"],
-            type=pathlib.Path,
-            target="out_dir",
         ),
     ]
     cfg = ConfigParser.from_args(parser, options)

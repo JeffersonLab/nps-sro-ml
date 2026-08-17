@@ -1,8 +1,7 @@
-from dataclasses import dataclass, field
-from typing import Any, Mapping, Optional
-
-import pandas as pd
+from dataclasses import dataclass, field, fields
+from typing import List, Mapping, Any
 import torch
+import pandas as pd
 
 from utils.graph import (
     create_unique_object_ids,
@@ -15,19 +14,21 @@ from utils.graph import (
 class OcInferenceHyperparameters:
     beta_thres: float = 0.5
     dist_thres: float = 0.5
-    pulse_score_thres: float = 0.5
     noise_idx: int = -1
 
     @classmethod
     def from_mapping(
         cls, hyperparameters: Mapping[str, Any] | None = None
     ) -> "OcInferenceHyperparameters":
-        return cls(**(hyperparameters or {}))
+        if not hyperparameters:
+            return cls()
 
+        valid_keys = {field.name for field in fields(cls)}
+        filtered = {
+            key: value for key, value in hyperparameters.items() if key in valid_keys
+        }
 
-from dataclasses import dataclass, field
-from typing import Dict, List
-import torch
+        return cls(**filtered)
 
 
 @dataclass
@@ -113,8 +114,8 @@ class OcInferenceResults:
     def to_df(self):
         return pd.DataFrame(self.to_dict())
 
-    def to_csv(self, filename):
-        self.to_df().to_csv(filename, index=False)
+    def to_csv(self, filename, **kwargs):
+        self.to_df().to_csv(filename, **kwargs)
 
 
 class ObjectCondensationInferencer:
@@ -123,17 +124,13 @@ class ObjectCondensationInferencer:
         self,
         model: torch.nn.Module,
         hyperparameters: OcInferenceHyperparameters | None = None,
-        config: Optional[dict] = None,
     ):
         self.model = model
         self.hyperparameters = hyperparameters or OcInferenceHyperparameters()
-        self.config = config or {}
 
     def _infer(self, data: Any, results: OcInferenceResults, event_id: int) -> int:
 
-        data = self._preprocess(data)
-        data = data.to(self.device)
-
+        # data = self._preprocess(data)
         x = data.x
         y = data.y.squeeze(-1).long()
         pos = data.pos
@@ -143,12 +140,12 @@ class ObjectCondensationInferencer:
             else torch.zeros(x.shape[0], dtype=torch.long, device=x.device)
         )
 
-        noise_idx = self.hyperparameters.get("noise_idx", -1)
+        noise_idx = self.hyperparameters.noise_idx
         truth_ids = create_unique_object_ids(y, batch, noise_idx)
 
         outs, idx_out, node_mask = pack_to_graph_batches(x, [pos], batch=batch)
-        x, pos = outs[0], outs[1]
-        x_c, beta = self.model(x, pos, node_mask)
+        x_, pos_ = outs[0], outs[1]
+        x_c, beta = self.model(x_, pos_, node_mask)
 
         x_c = reorder_from_graph_batches(x_c, idx_out)
         beta = reorder_from_graph_batches(beta, idx_out)
@@ -156,7 +153,7 @@ class ObjectCondensationInferencer:
 
         for b in batch.unique(sorted=True):
             b_mask = batch == b
-            cluster_ids, min_d = oc_inference_per_graph(
+            object_ids, min_d = oc_inference_per_graph(
                 x_c[b_mask],
                 beta[b_mask],
                 beta_thres=self.hyperparameters.beta_thres,
@@ -171,7 +168,7 @@ class ObjectCondensationInferencer:
                 min_d=min_d,
                 beta=beta[b_mask],
                 x_c=x_c[b_mask],
-                cluster_ids=cluster_ids,
+                object_ids=object_ids,
             )
             event_id += 1
 
@@ -183,7 +180,6 @@ class ObjectCondensationInferencer:
 
         with torch.no_grad():
             for data in dataloader:
-                data = data.to(self.model.device)
                 event_id = self._infer(data, results, event_id)
 
         return results
