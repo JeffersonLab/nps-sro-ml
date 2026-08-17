@@ -49,8 +49,9 @@ class ConfigParser:
         self._log_dir = save_dir / 'logs' / exper_name / run_id
 
         # update the trainer config
-        self._config["trainer"]["save_dir"] = str(self.save_dir)
-        self._config["trainer"]["log_dir"] = str(self.log_dir)
+        if self._config.get("trainer", None):
+            self._config["trainer"]["save_dir"] = str(self.save_dir)
+            self._config["trainer"]["log_dir"] = str(self.log_dir)
 
         # make directory for saving checkpoints and log.
         exist_ok = run_id == ''
