@@ -254,7 +254,6 @@ class HitObjectCondensationModel(BaseModel):
         # Encoder for input features
         ################################################################################
         self.fea_encoder = nn.Linear(in_features=2, out_features=self.d_model)  # e, t
-        self.ln = nn.LayerNorm(self.d_model)
         ################################################################################
         # Attentional encoder layers
         ################################################################################
@@ -314,8 +313,6 @@ class HitObjectCondensationModel(BaseModel):
         x = x * mask.unsqueeze(-1)
         x = self.fea_encoder(x)  # [B, N_max, d_model]
         x = x * mask.unsqueeze(-1)  # [B, N_max, d_model]
-
-        x = self.ln(x)
 
         pos = self.pos_emb(pos.permute(0, 2, 1), mask)
         pos = pos.permute(0, 2, 1)  # [B, N_max, d_model]
