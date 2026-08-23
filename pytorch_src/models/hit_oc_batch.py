@@ -50,7 +50,7 @@ class BatchHitObjectCondensationModel(BaseModel):
         ################################################################################
         gravnet_layers = [
             GravNet(
-                in_channels=self.d_model if i > 0 else 2,
+                in_channels=self.d_model,
                 out_channels=self.d_model,
                 space_dimensions=self.gravnet_space_dimensions,
                 propagate_dimensions=self.gravnet_propagate_dimensions,
