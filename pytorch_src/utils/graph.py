@@ -2,6 +2,35 @@ import torch
 from typing import List, Tuple
 
 
+def indices_to_edge_index(indices: torch.Tensor) -> torch.LongTensor:
+    """
+    Parameters
+    ----------
+    indices : torch.Tensor
+        node index of shape [N, k]
+
+    Return
+    ------
+    edge_index: torch.LongTensor
+        edge connection of shape [2, E]
+    """
+    N, k = indices.shape
+
+    dst = torch.arange(N, device=indices.device)
+    dst = dst[:, None].expand(N, k)
+    src = indices
+
+    edge_index = torch.stack(
+        [
+            src.reshape(-1),
+            dst.reshape(-1),
+        ],
+        dim=0,
+    )
+
+    return edge_index
+
+
 def edge_to_adj_matrix(
     edge_index: torch.LongTensor, num_nodes: int
 ) -> torch.BoolTensor:
