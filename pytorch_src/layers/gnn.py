@@ -5,105 +5,71 @@ from typing import Optional, Literal, Sequence, Union
 from utils.graph import indices_to_edge_index
 
 
-class kNN(nn.Module):
-    def __init__(self, k: int):
-        super().__init__()
-        self.k = k
+def knn(
+    k: int,
+    x: torch.Tensor,
+    y: torch.Tensor,
+    batch_x: Optional[torch.Tensor] = None,
+    batch_y: Optional[torch.Tensor] = None,
+    return_edge_index: bool = False,
+) -> torch.Tensor:
+    """
+    Parameters
+    ----------
+    k : int
+        Number of nearest neighbors to find.
+    x : torch.Tensor
+        Input tensor of shape [N, D], where N is the number of samples and D is the feature dimension.
+    y : torch.Tensor
+        Reference tensor of shape [M, D], where M is the number of reference samples and D is the feature dimension.
+    batch_x : Optional[torch.Tensor], optional
+        Batch indices for x, of shape [N]. If None, all samples are assumed to belong to the same batch. Default is None.
+    batch_y : Optional[torch.Tensor], optional
+        Batch indices for y, of shape [M]. If None, all samples are assumed to belong to the same batch. Default is None.
+    return_edge_index : bool, optional
+        If True, returns the edge index of the k nearest neighbors instead of the distances and indices. Default is False.
 
-    def _knn(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """
-        Compute the k-nearest neighbors of each point in x with respect to points in y.
+    Returns
+    -------
+    tuple[torch.Tensor, torch.BoolTensor]
+        A tuple containing:
+        - Tensor of shape [N, k] containing the indices of the k nearest neighbors from y for each sample in x.
+        - Boolean tensor of shape [N, k] indicating valid neighbors.
+    """
 
-        Parameters
-        ----------
-        x : torch.Tensor
-            Input tensor of shape [N, D], where N is the number of samples and D is the feature dimension.
-        y : torch.Tensor
-            Reference tensor of shape [M, D], where M is the number of reference samples and D is the feature dimension.
+    x = x.view(-1, 1) if x.dim() == 1 else x
+    y = y.view(-1, 1) if y.dim() == 1 else y
 
-        Returns
-        -------
-        indices : torch.Tensor
-            Tensor of shape [N, k] containing the indices of the k nearest neighbors from y for each sample in x.
-
-        """
-
-        # [N, 1, D] - [1, M, D] -> [N, M, D]
-        diff = x[:, None, :] - y[None, :, :]
-        dist2 = torch.sum(diff * diff, dim=-1)
-        _, indices = torch.topk(
-            dist2,
-            k=self.k,
-            dim=1,
-            largest=False,
-            sorted=True,
+    if x.size(1) != y.size(1):
+        raise ValueError(
+            f"Feature dimensions of x and y must match. Got {x.size(1)} and {y.size(1)}."
         )
-        return indices
 
-    def forward(
-        self,
-        x: torch.Tensor,
-        y: torch.Tensor,
-        batch_x: Optional[torch.Tensor] = None,
-        batch_y: Optional[torch.Tensor] = None,
-        return_edge_index: bool = False,
-    ) -> torch.Tensor:
-        """
-        Parameters
-        ----------
-        x : torch.Tensor
-            Input tensor of shape [N, D], where N is the number of samples and D is the feature dimension.
-        y : torch.Tensor
-            Reference tensor of shape [M, D], where M is the number of reference samples and D is the feature dimension.
+    if batch_x is None:
+        batch_x = x.new_zeros(x.size(0), dtype=torch.long)
 
-        Returns
-        -------
-        torch.Tensor
-            Tensor of shape [N, k, D] containing the k nearest neighbors from y for each sample in x.
-        """
+    if batch_y is None:
+        batch_y = y.new_zeros(y.size(0), dtype=torch.long)
 
-        x = x.view(-1, 1) if x.dim() == 1 else x
-        y = y.view(-1, 1) if y.dim() == 1 else y
+    diff = x[:, None, :] - y[None, :, :]
+    dist2 = torch.sum(diff * diff, dim=-1)
 
-        if x.size(1) != y.size(1):
-            raise ValueError(
-                f"Feature dimensions of x and y must match. Got {x.size(1)} and {y.size(1)}."
-            )
+    same_batch = batch_x[:, None] == batch_y[None, :]
+    dist2 = dist2.masked_fill(~same_batch, float('inf'))
+    distances, indices = torch.topk(
+        dist2,
+        k=k,
+        dim=1,
+        largest=False,
+        sorted=True,
+    )
 
-        if batch_x is None:
-            batch_x = x.new_zeros(x.size(0), dtype=torch.long)
+    valid = torch.isfinite(distances)
 
-        if batch_y is None:
-            batch_y = y.new_zeros(y.size(0), dtype=torch.long)
+    if return_edge_index:
+        return indices_to_edge_index(indices, valid)
 
-        # Compute k-nearest neighbors for each batch
-        indices = torch.empty((x.size(0), self.k), dtype=torch.long, device=x.device)
-        for b in torch.unique(batch_x):
-            mask_x = batch_x == b
-            mask_y = batch_y == b
-
-            if mask_x.sum() == 0 or mask_y.sum() == 0:
-                continue
-
-            x_b = x[mask_x]
-            y_b = y[mask_y]
-            global_y_indices = mask_y.nonzero(as_tuple=True)[0]
-
-            # minmax scale to [0, 1]
-            min_xy = min(x_b.min().item(), y_b.min().item())
-            x_b, y_b = x_b - min_xy, y_b - min_xy
-
-            max_xy = max(x_b.max().item(), y_b.max().item())
-            eps = 1e-12
-            x_b, y_b = x_b / (max_xy + eps), y_b / (max_xy + eps)
-
-            local_indices = self._knn(x_b, y_b)
-            indices[mask_x] = global_y_indices[local_indices]
-
-        if return_edge_index:
-            return indices_to_edge_index(indices)
-
-        return indices
+    return indices, valid
 
 
 class MessagePassing(nn.Module, ABC):
@@ -227,7 +193,6 @@ class GravNet(MessagePassing):
         self.k = k
         self.scale = scale
 
-        self.knn = kNN(k)
         self.lin_s = nn.Linear(in_channels, space_dimensions)
         self.lin_h = nn.Linear(in_channels, propagate_dimensions)
         self.lin_out1 = nn.Linear(in_channels, out_channels, bias=False)
@@ -262,7 +227,7 @@ class GravNet(MessagePassing):
         s_l = self.lin_s(x[0])
         s_r = self.lin_s(x[1]) if is_bipartite else s_l
 
-        edge_index = self.knn(s_r, s_l, batch[1], batch[0], return_edge_index=True)
+        edge_index = knn(self.k, s_r, s_l, batch[1], batch[0], return_edge_index=True)
 
         edge_weight = (s_l[edge_index[0]] - s_r[edge_index[1]]).pow(2).sum(-1)
         edge_weight = torch.exp(-self.scale * edge_weight)

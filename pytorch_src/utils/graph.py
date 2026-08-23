@@ -2,18 +2,23 @@ import torch
 from typing import List, Tuple
 
 
-def indices_to_edge_index(indices: torch.Tensor) -> torch.LongTensor:
+def indices_to_edge_index(
+    indices: torch.Tensor, valid: torch.BoolTensor
+) -> torch.LongTensor:
     """
     Parameters
     ----------
     indices : torch.Tensor
         node index of shape [N, k]
+    valid : torch.BoolTensor
+        boolean mask of shape [N, k] indicating valid edges
 
-    Return
-    ------
+    Returns
+    -------
     edge_index: torch.LongTensor
-        edge connection of shape [2, E]
+        edge connection of shape [2, E], only including valid edges
     """
+
     N, k = indices.shape
 
     dst = torch.arange(N, device=indices.device)
@@ -22,8 +27,8 @@ def indices_to_edge_index(indices: torch.Tensor) -> torch.LongTensor:
 
     edge_index = torch.stack(
         [
-            src.reshape(-1),
-            dst.reshape(-1),
+            src[valid].reshape(-1),
+            dst[valid].reshape(-1),
         ],
         dim=0,
     )
