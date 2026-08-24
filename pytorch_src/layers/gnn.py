@@ -1,7 +1,8 @@
+from abc import ABC, abstractmethod
+from typing import Literal, Optional, Sequence, Union
+
 import torch
 import torch.nn as nn
-from abc import ABC, abstractmethod
-from typing import Optional, Literal, Sequence, Union
 from utils.graph import indices_to_edge_index
 
 
@@ -73,31 +74,59 @@ def knn(
 
 
 class MessagePassing(nn.Module, ABC):
-    def __init__(
-        self,
-        aggr: Union[
-            Literal['add', 'mean', 'max'],
-            Sequence[Literal['add', 'mean', 'max']],
-        ] = 'add',
-    ):
+    def __init__(self, aggr: Sequence[Literal["add", "mean", "max"]]):
         super().__init__()
-        self.aggr = [aggr] if isinstance(aggr, str) else list(aggr)
-        if not self.aggr or any(a not in {'add', 'mean', 'max'} for a in self.aggr):
-            raise ValueError(f"Aggregation method(s) ls{self.aggr!r} not supported.")
+        self.aggr = aggr
 
-    def _aggregate(self, messages: torch.Tensor) -> torch.Tensor:
+    def _aggregate(self, messages: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """
+        Aggregate messages from neighbors.
+
+        Parameters
+        ----------
+        messages : torch.Tensor
+            Messages from neighbors, shape [num_edges, message_dim].
+        mask : torch.BoolTensor
+            Mask indicating which messages belong to which nodes, shape [num_nodes, num_edges].
+
+        **kwargs
+            Additional keyword arguments for aggregation.
+        Returns
+        -------
+        torch.Tensor
+            Aggregated messages, shape [num_nodes, message_dim].
+        """
+
         outputs = []
         for aggr in self.aggr:
-            if aggr == 'add':
-                outputs.append(messages.sum(dim=0))
-            elif aggr == 'mean':
-                outputs.append(messages.mean(dim=0))
-            else:  # max
-                outputs.append(messages.max(dim=0).values)
-        return torch.cat(outputs, dim=-1) if len(outputs) > 1 else outputs[0]
+
+            if aggr == "add":
+                ag = torch.matmul(mask.float(), messages)
+            elif aggr == "mean":
+                n = mask.float().sum(dim=1, keepdim=True)
+                sum_ = torch.matmul(mask.float(), messages)
+                ag = sum_ / n.clamp(min=1)
+            elif aggr == "max":
+                expanded_messages = messages.unsqueeze(0)  # [1, E, P]
+                expanded_mask = mask.unsqueeze(-1)  # [N, E, 1]
+                masked_messages = torch.where(
+                    expanded_mask, expanded_messages, torch.tensor(float('-inf'))
+                )
+                ag = masked_messages.max(dim=1).values
+                has_neighbors = mask.any(dim=1, keepdim=True)
+
+                ag = torch.where(
+                    has_neighbors,
+                    ag,
+                    torch.zeros_like(ag),
+                )
+
+            outputs.append(ag)
+
+        return torch.cat(outputs, dim=-1)  # [N, P * len(aggr)]
 
     @abstractmethod
-    def message(self, x_j: torch.Tensor, edge_features, **kwargs) -> torch.Tensor:
+    def message(self, x_j: torch.Tensor, edge_weights, **kwargs) -> torch.Tensor:
         """
         Compute the node output, as represented as `\phi(x_i, x_j, e_{ji})`
         """
@@ -118,60 +147,27 @@ class MessagePassing(nn.Module, ABC):
         x: Union[torch.Tensor, tuple[torch.Tensor, Optional[torch.Tensor]]],
         edge_index: torch.Tensor,
         edge_weight: torch.Tensor,
-        size: Optional[tuple[int, int]] = None,
         **kwargs,
     ) -> torch.Tensor:
-        """
-        Orchestrate the message passing.
 
-        Parameters
-        ----------
-        x : torch.Tensor or tuple[torch.Tensor, torch.Tensor]
-            Source features, or a ``(source, target)`` pair for bipartite
-            message passing.
-        size : tuple[int, int], optional
-            Number of source and target nodes. Required when target features
-            are not provided.
-        edge_index : torch.Tensor
-            Edge indices of shape [2, E], where E is the number of edges.
-
-        Returns
-        -------
-        torch.Tensor
-            Tensor of shape [N, D] after message passing.
-        """
         source, target = (x, x) if isinstance(x, torch.Tensor) else x
-        if size is None:
-            if target is None:
-                raise ValueError("size is required when target features are None.")
-            size = (source.size(0), target.size(0))
 
         row, col = edge_index
-        outputs = []
-        for i in range(size[1]):
 
-            edge_mask = col == i
-            edge_ids = edge_mask.nonzero(as_tuple=True)[0]
+        messages = self.message(source[row], edge_weight, **kwargs)  # [E, P]
+        nodes = torch.arange(
+            target.size(0),
+            device=messages.device,
+        )
+        mask = nodes[:, None] == col[None, :]  # [N, E]
 
-            if edge_ids.numel() == 0:
-                aggregated = source.new_zeros(source.size(-1) * len(self.aggr))
-            else:
-                neighbors = row[edge_ids]
-                weights = edge_weight[edge_ids]
-
-                # Compute and aggregate messages from source neighbors.
-                messages = self.message(source[neighbors], weights, **kwargs)
-                aggregated = self._aggregate(messages)
-
-            # Update node embedding
-            outputs.append(self.update(aggregated, **kwargs))
-
-        if not outputs:
-            raise ValueError("Message passing requires at least one target node.")
-        return torch.stack(outputs, dim=0)
+        aggregated = self._aggregate(messages, mask)
+        return self.update(aggregated, **kwargs)
 
     def forward(self, x):
-        raise NotImplementedError("...")
+        raise NotImplementedError(
+            "The forward method must be implemented in subclasses of MessagePassing."
+        )
 
 
 class GravNet(MessagePassing):
@@ -184,7 +180,7 @@ class GravNet(MessagePassing):
         k: int,
         scale: float = 10,
     ):
-        super().__init__(aggr=['mean', 'max'])
+        super().__init__(aggr=["mean", "max"])
 
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -206,37 +202,21 @@ class GravNet(MessagePassing):
 
     def forward(self, x, batch=None):
 
-        is_bipartite: bool = True
-        if isinstance(x, torch.Tensor):
-            x = (x, x)
-            is_bipartite = False
-
         if batch is None:
-            batch = (
-                x[0].new_zeros(x[0].size(0), dtype=torch.long),
-                x[1].new_zeros(x[1].size(0), dtype=torch.long),
-            )
+            batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
 
-        elif isinstance(batch, torch.Tensor):
-            batch = (batch, batch)
-        else:
-            batch = (batch[0], batch[1])
+        h_l = self.lin_h(x)
+        s_l = self.lin_s(x)
 
-        h_l = self.lin_h(x[0])
+        edge_index = knn(self.k, s_l, s_l, batch, batch, return_edge_index=True)
 
-        s_l = self.lin_s(x[0])
-        s_r = self.lin_s(x[1]) if is_bipartite else s_l
-
-        edge_index = knn(self.k, s_r, s_l, batch[1], batch[0], return_edge_index=True)
-
-        edge_weight = (s_l[edge_index[0]] - s_r[edge_index[1]]).pow(2).sum(-1)
+        edge_weight = (s_l[edge_index[0]] - s_l[edge_index[1]]).pow(2).sum(-1)
         edge_weight = torch.exp(-self.scale * edge_weight)
 
         out = self.propagate(
-            (h_l, None),
+            h_l,
             edge_index,
             edge_weight,
-            size=(s_l.size(0), s_r.size(0)),
         )
 
-        return self.lin_out1(x[1]) + self.lin_out2(out)
+        return self.lin_out1(x) + self.lin_out2(out)
