@@ -6,7 +6,6 @@ from layers.attention import FullAttention, AttentionLayer
 from layers.encoders import Encoder, VanillaEncoderLayer
 from layers.embed import PositionalEmbedding
 from layers.oc import ObjectCondensation
-from layers.gnn import MaskedConv1d
 
 
 class WaveformEncoder(BaseModel):
@@ -79,13 +78,13 @@ class WaveformEncoder(BaseModel):
         return x_out.reshape(x.shape[0], x.shape[1], x_out.shape[-1])
 
 
-class WaveformObjectCondensationModel(BaseModel):
+class WfAttnGnnOcModel(BaseModel):
     """
     Base class for Object Condensation models.
     """
 
     def __init__(self, **kwargs):
-        super(WaveformObjectCondensationModel, self).__init__()
+        super(WfAttnGnnOcModel, self).__init__()
 
         self.pos_dim = kwargs.get('pos_dim', 2)  # dim of detector position (x,y)
 
@@ -223,106 +222,4 @@ class WaveformObjectCondensationModel(BaseModel):
         x_c = self.oc_mlp_pos(x)
         beta = self.oc_mlp_beta(x)
 
-        return x_c, beta
-
-
-class HitObjectCondensationModel(BaseModel):
-    """
-    Object Condensation model for hit-level data.
-    """
-
-    def __init__(self, **kwargs):
-        super(HitObjectCondensationModel, self).__init__()
-
-        self.pos_dim = kwargs.get('pos_dim', 2)  # dim of detector position (x,y)
-
-        # node level encoder parameters
-        self.d_model = kwargs.get('d_model', 32)
-        self.n_enc_layers = kwargs.get('n_enc_layers', 2)
-        self.num_heads = kwargs.get('num_heads', 4)
-        self.attn_dropout = kwargs.get('attn_dropout', 0.1)
-        self.attn_ff = kwargs.get('attn_ff', self.d_model * 4)
-
-        # oc mlp parameters
-        self.oc_mlp_pos_nlayers = kwargs.get('oc_mlp_pos_nlayers', 2)
-        self.oc_mlp_pos_hidden = kwargs.get('oc_mlp_pos_hidden', 64)
-        self.oc_mlp_dropout = kwargs.get('oc_mlp_dropout', 0.1)
-        self.oc_mlp_beta_nlayers = kwargs.get('oc_mlp_beta_nlayers', 2)
-        self.oc_mlp_beta_hidden = kwargs.get('oc_mlp_beta_hidden', 64)
-
-        ################################################################################
-        # Encoder for input features
-        ################################################################################
-        self.fea_encoder = nn.Linear(in_features=2, out_features=self.d_model)  # e, t
-        ################################################################################
-        # Attentional encoder layers
-        ################################################################################
-        self.pos_emb = MaskedConv1d(
-            in_channels=2,  # x, y
-            out_channels=self.d_model,
-            kernel_size=1,
-        )
-
-        attn_layers = [
-            VanillaEncoderLayer(
-                attn_layer=AttentionLayer(
-                    FullAttention(
-                        mask_flag=True,
-                        attention_dropout=self.attn_dropout,
-                        scale=None,
-                    ),
-                    d_model=self.d_model,
-                    n_heads=self.num_heads,
-                ),
-                d_model=self.d_model,
-                ff_kwargs={
-                    "d_ff": self.attn_ff,
-                    "activation": nn.LeakyReLU,
-                },
-                dropout=self.attn_dropout,
-                batchnorm=False,
-            )
-            for _ in range(self.n_enc_layers)
-        ]
-        self.attn_enc = Encoder(attn_layers)
-
-        self.oc = ObjectCondensation(
-            n_x_layers=self.oc_mlp_pos_nlayers,
-            x_in=self.d_model,
-            x_hidden=self.oc_mlp_pos_hidden,
-            x_out=self.pos_dim,
-            n_beta_layers=self.oc_mlp_beta_nlayers,
-            beta_hidden=self.oc_mlp_beta_hidden,
-            x_dropout=self.oc_mlp_dropout,
-        )
-
-    def forward(
-        self, x: torch.Tensor, pos: torch.Tensor, mask: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Parameters
-        ----------
-        x : torch.Tensor
-            Input features of shape (batch_size, num_nodes, 2) representing (energy, time)
-        pos : torch.Tensor
-            Geometric positions of shape (batch_size, num_nodes, 2) representing (x, y)
-        mask : torch.Tensor
-            Mask for valid nodes, shape (batch_size, num_nodes).
-        """
-
-        x = x * mask.unsqueeze(-1)
-        x = self.fea_encoder(x)  # [B, N_max, d_model]
-        x = x * mask.unsqueeze(-1)  # [B, N_max, d_model]
-
-        pos = self.pos_emb(pos.permute(0, 2, 1), mask)
-        pos = pos.permute(0, 2, 1)  # [B, N_max, d_model]
-        x = x + pos  # [B, N_max, d_model]
-
-        attn_mask = ~mask
-        attn_mask = attn_mask.unsqueeze(1)  # [B, 1, N_max]
-        attn_mask = attn_mask.unsqueeze(2)  # [B, 1, 1, N_max]
-
-        x, _ = self.attn_enc(x, attn_mask=attn_mask)  # [G, N, d_model]
-
-        x_c, beta = self.oc(x)  # [G, N, pos_dim], [G, N, 1]
         return x_c, beta

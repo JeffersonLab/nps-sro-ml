@@ -9,21 +9,22 @@ from layers.gnn import GravNet
 from utils.masks import cross_graph_mask
 
 
-
-class BatchHitObjectCondensationModel(BaseModel):
+class HitAttnGnnOcModel(BaseModel):
     """
     Object Condensation model for hit-level data.
     """
 
     def __init__(self, **kwargs):
-        super(BatchHitObjectCondensationModel, self).__init__()
+        super(HitAttnGnnOcModel, self).__init__()
 
         self.pos_dim = kwargs.get('pos_dim', 2)  # dim of detector position (x,y)
 
         # gravnet parameters
         self.n_gravnet_layers = kwargs.get('n_gravnet_layers', 2)
         self.gravnet_space_dimensions = kwargs.get('gravnet_space_dimensions', 4)
-        self.gravnet_propagate_dimensions = kwargs.get('gravnet_propagate_dimensions', 22)
+        self.gravnet_propagate_dimensions = kwargs.get(
+            'gravnet_propagate_dimensions', 22
+        )
         self.gravnet_k = kwargs.get('gravnet_k', 8)
 
         # node level encoder parameters
