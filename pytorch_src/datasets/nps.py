@@ -36,6 +36,7 @@ class _NPSDataSource(Protocol):
 
     @staticmethod
     def glob_paths(data_dir, max_files=None) -> list[pathlib.Path]: ...
+
     @staticmethod
     def validate_path(path: pathlib.Path) -> bool: ...
 
@@ -129,7 +130,8 @@ class _NpySource(_NPSDataSource):
         "hits.npy",
         "geometry.npy",
         "edge_index.npy",
-        "clusters.npy",
+        "cluster_index.npy",
+        "cluster_type.npy",
     )
 
     def __init__(
@@ -153,12 +155,14 @@ class _NpySource(_NPSDataSource):
         hits = np.load(event_dir / "hits.npy")
         geometry = np.load(event_dir / "geometry.npy")
         edge_index = np.load(event_dir / "edge_index.npy")
-        clusters = np.load(event_dir / "clusters.npy")
-        return waveforms, hits, geometry, edge_index, clusters
+        cluster_index = np.load(event_dir / "cluster_index.npy")
+        cluster_type = np.load(event_dir / "cluster_type.npy")
+
+        return waveforms, hits, geometry, edge_index, cluster_index, cluster_type
 
     def to_tensors(self, raw: Any) -> dict[str, torch.Tensor]:
 
-        waveforms, hits, geometry, edge_index, clusters = raw
+        waveforms, hits, geometry, edge_index, cluster_index, cluster_type = raw
 
         pos = torch.as_tensor(geometry, dtype=torch.float32)
 
@@ -170,7 +174,8 @@ class _NpySource(_NPSDataSource):
         else:
             x = torch.as_tensor(hits, dtype=torch.float32)
 
-        y = torch.as_tensor(clusters, dtype=torch.long)
+        y = torch.as_tensor(cluster_index, dtype=torch.long)
+        cluster_type = torch.as_tensor(cluster_type, dtype=torch.long)
 
         edge_index = torch.as_tensor(edge_index, dtype=torch.long)
         if edge_index.numel() == 0:
@@ -182,16 +187,13 @@ class _NpySource(_NPSDataSource):
             pass
 
         data = {
-            "x": x,
+            "x": x,  # Node features (either waveforms or hits)
             "edge_index": edge_index,
             "edge_attr": None,
-            "y": y,
+            "y": y,  # Cluster indices for each node
             "pos": pos,
+            "cluster_type": cluster_type,  # Type of each cluster
         }
-        if self.feature_mode == "waveform":
-            data["hits"] = torch.as_tensor(hits, dtype=torch.float32)
-        elif self.feature_mode == "hit":
-            data["waveforms"] = torch.as_tensor(waveforms, dtype=torch.float32)
         return data
 
     @staticmethod
