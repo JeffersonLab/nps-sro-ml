@@ -1,10 +1,9 @@
 import pytest
 import numpy as np
-from torch_geometric.data import Data, InMemoryDataset
-from base.dataloader import BaseDataLoader
+from base.dataloader import BaseDataLoader, Data, Dataset
 
 
-class MockDataset(InMemoryDataset):
+class MockDataset(Dataset):
     """Mock dataset for testing purposes."""
 
     def __init__(self, num_samples=100):
@@ -26,7 +25,7 @@ class MockDataset(InMemoryDataset):
         return self._data_list[idx]
 
 
-class PlainPygDataDataset:
+class PlainDataDataset:
     def __init__(self, num_samples=4):
         self.samples = []
         for i in range(num_samples):
@@ -59,7 +58,9 @@ class SimpleTorchDataset:
             edge_index = np.array([[0, 1, 2], [1, 2, 3]], dtype=np.int64)
             y = np.arange(10, dtype=np.int64) + i
             pos = np.stack([np.arange(10), np.arange(10)], axis=1).astype(np.float32)
-            self.samples.append(SimpleGraphData(x=x, edge_index=edge_index, y=y, pos=pos))
+            self.samples.append(
+                SimpleGraphData(x=x, edge_index=edge_index, y=y, pos=pos)
+            )
 
     def __len__(self):
         return len(self.samples)
@@ -251,9 +252,9 @@ class TestBaseDataLoader:
         assert hasattr(batch, "x")
         assert hasattr(batch, "batch")
 
-    def test_torch_loader_opt_in_batches_pyg_data_objects(self):
-        """Torch-only collate should also work on plain PyG Data samples."""
-        dataset = PlainPygDataDataset(num_samples=4)
+    def test_torch_loader_opt_in_batches_data_objects(self):
+        """Torch-only collate should work with the available Data implementation."""
+        dataset = PlainDataDataset(num_samples=4)
         dataloader = BaseDataLoader(
             dataset,
             batch_size=2,
