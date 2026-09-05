@@ -13,6 +13,7 @@ def knn(
     batch_x: Optional[torch.Tensor] = None,
     batch_y: Optional[torch.Tensor] = None,
     return_edge_index: bool = False,
+    exclude_self: bool = True,
 ) -> torch.Tensor:
     """
     Parameters
@@ -57,6 +58,15 @@ def knn(
 
     same_batch = batch_x[:, None] == batch_y[None, :]
     dist2 = dist2.masked_fill(~same_batch, float('inf'))
+
+    if exclude_self and x.size(0) == y.size(0):
+        self_mask = torch.eye(
+            x.size(0),
+            dtype=torch.bool,
+            device=x.device,
+        )
+        dist2 = dist2.masked_fill(self_mask, float("inf"))
+
     distances, indices = torch.topk(
         dist2,
         k=k,
@@ -180,7 +190,7 @@ class GravNet(MessagePassing):
         k: int,
         scale: float = 10,
     ):
-        super().__init__(aggr=["mean", "max"])
+        super().__init__(aggr=["add", "mean", "max"])
 
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -192,7 +202,7 @@ class GravNet(MessagePassing):
         self.lin_s = nn.Linear(in_channels, space_dimensions)
         self.lin_h = nn.Linear(in_channels, propagate_dimensions)
         self.lin_out1 = nn.Linear(in_channels, out_channels, bias=False)
-        self.lin_out2 = nn.Linear(2 * propagate_dimensions, out_channels)
+        self.lin_out2 = nn.Linear(3 * propagate_dimensions, out_channels)
 
     def message(self, x_j: torch.Tensor, edge_weight: torch.Tensor) -> torch.Tensor:
         return x_j * edge_weight.unsqueeze(1)
