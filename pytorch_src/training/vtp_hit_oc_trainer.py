@@ -161,19 +161,22 @@ class ObjectCondensationTrainer(BaseTrainer):
 
     def _preprocess_data(self, x, pos):
 
-        x_ = x.clone()
-        pos_ = pos.clone()
-        x_[:, 0] = x[:, 0] / 1600
-
         NCOLS = 30
         NROWS = 36
         NTIME = 110
 
-        x_[:, 1] = 2 * x[:, 1] / NTIME - 1
-        pos_[:, 0] = 2 * pos[:, 0] / NCOLS - 1
-        pos_[:, 1] = 2 * pos[:, 1] / NROWS - 1
+        e = x[:, 0]
+        scaled_t = 2 * x[:, 1] / NTIME - 1
+        scaled_e = e / 1600
+        log_e = torch.log1p(e)
 
-        return x_, pos_
+        scaled_x = 2 * pos[:, 0] / NCOLS - 1
+        scaled_y = 2 * pos[:, 1] / NROWS - 1
+
+        return (
+            torch.stack([scaled_e, log_e, scaled_t], dim=-1),
+            torch.stack([scaled_x, scaled_y], dim=-1),
+        )
 
     def _train_epoch(self, epoch):
 
@@ -355,6 +358,7 @@ class ObjectCondensationTrainer(BaseTrainer):
             if hasattr(data, "batch")
             else torch.zeros(x.shape[0], dtype=torch.long, device=x.device)
         )
+        x, pos = self._preprocess_data(x, pos)
 
         node_size = Dim("node_size", min=1)
         dynamic_shapes = {
