@@ -3,7 +3,7 @@ from torch import nn
 
 from base.model import BaseModel
 from layers.oc import ObjectCondensation
-from layers.gnn import GravNet
+from layers.gnn import GravNetConv
 
 
 class SignalDenseLayer(BaseModel):
@@ -48,6 +48,7 @@ class HitGnnOcModel(BaseModel):
             'gravnet_propagate_dimensions', 22
         )
         self.gravnet_k = kwargs.get('gravnet_k', 8)
+        self.gravnet_scale = kwargs.get('gravnet_scale', 10)
 
         # oc mlp parameters
         self.oc_mlp_pos_nlayers = kwargs.get('oc_mlp_pos_nlayers', 2)
@@ -65,22 +66,38 @@ class HitGnnOcModel(BaseModel):
         ################################################################################
         # Encoder for input features
         ################################################################################
-        self.fea_encoder = nn.Linear(
-            in_features=4, out_features=self.d_model
-        )  # e, t, x, y
 
-        gravnet_layers = [
-            GravNet(
-                in_channels=self.d_model,
-                out_channels=self.d_model,
-                space_dimensions=self.gravnet_space_dimensions,
-                propagate_dimensions=self.gravnet_propagate_dimensions,
-                k=self.gravnet_k,
-            )
-            for _ in range(self.n_gravnet_layers)
-        ]
+        # e and log(e)
+        self.energy_encoder = nn.Sequential(
+            nn.Linear(2, self.d_model // 4),
+            nn.ReLU(),
+        )
 
-        self.gnn = nn.ModuleList(gravnet_layers)
+        self.time_encoder = nn.Sequential(
+            nn.Linear(1, self.d_model // 4),
+            nn.ReLU(),
+        )
+
+        self.geo_encoder = nn.Sequential(
+            nn.Linear(2, self.d_model // 2),
+            nn.ReLU(),
+        )
+
+        self.gnn = GravNetConv(
+            in_channels=self.d_model,
+            out_channels=self.d_model,
+            space_dimensions=self.gravnet_space_dimensions,
+            propagate_dimensions=self.gravnet_propagate_dimensions,
+            k=self.gravnet_k,
+            n_layers=self.n_gravnet_layers,
+            scale=self.gravnet_scale,
+        )
+
+        self.gnn_fusion = nn.Sequential(
+            nn.Linear(self.d_model * self.n_gravnet_layers, self.d_model),
+            nn.LayerNorm(self.d_model),
+            nn.SiLU(),
+        )
 
         self.oc = ObjectCondensation(
             n_x_layers=self.oc_mlp_pos_nlayers,
@@ -100,25 +117,35 @@ class HitGnnOcModel(BaseModel):
 
     def forward(
         self, x: torch.Tensor, pos: torch.Tensor, batch: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Parameters
         ----------
         x : torch.Tensor
-            Input features of shape (num_nodes, 2) representing (energy, time)
+            Input features of shape (num_nodes, 3) representing (scaled e, log(e), time)
         pos : torch.Tensor
             Geometric positions of shape (num_nodes, 2) representing (x, y)
         batch : torch.Tensor
             Batch vector of shape (num_nodes,) indicating the graph index for each node.
+        Returns
+        -------
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+            x_c: [N, pos_dim]
+            beta: [N, 1]
+            x_signal: [N, 1]
         """
 
-        x = torch.cat(
-            [x, pos], dim=-1
-        )  # Concatenate input features with positional information
-        x = self.fea_encoder(x)  # [N, d_model]
+        feat_e = x[:, :2]  # [N, 2] energy features (scaled e, log(e))
+        feat_t = x[:, 2:3]  # [N, 1] time feature
 
-        for gl in range(self.n_gravnet_layers):
-            x = self.gnn[gl](x, batch=batch)  # [N, d_model]
+        x_e = self.energy_encoder(feat_e)  # [N, d_model//4] energy
+        x_t = self.time_encoder(feat_t)  # [N, d_model//4] time
+        x_pos = self.geo_encoder(pos)  # [N, d_model//2] position
+
+        x = torch.cat([x_e, x_t, x_pos], dim=-1)  # [N, d_model]
+
+        x = self.gnn(x, batch=batch)  # [N, d_model * n_gravnet_layers]
+        x = self.gnn_fusion(x)  # [N, d_model]
 
         x_signal = self.signal_out(x)  # [N, 1], logits for triggered hits
         x_c, beta = self.oc(x)  # [N, pos_dim], [N, 1]

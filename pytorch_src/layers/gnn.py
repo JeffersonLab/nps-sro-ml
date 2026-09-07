@@ -230,3 +230,33 @@ class GravNet(MessagePassing):
         )
 
         return self.lin_out1(x) + self.lin_out2(out)
+
+
+class GravNetConv(nn.Module):
+    def __init__(self, 
+                 in_channels:int, out_channels, space_dimensions, propagate_dimensions, k, n_layers:int=1, scale=10):
+        super().__init__()
+
+        self.n_layers = n_layers
+        layers = nn.ModuleList()
+
+        for i in range(self.n_layers):
+            layers.append(
+                GravNet(
+                    in_channels=in_channels if i == 0 else out_channels,
+                    out_channels=out_channels,
+                    space_dimensions=space_dimensions,
+                    propagate_dimensions=propagate_dimensions,
+                    k=k,
+                    scale=scale,
+                )
+            )
+        self.gravnet_layers = layers
+
+
+    def forward(self, x, batch=None):
+        out = []
+        for i in range(self.n_layers):
+            x = self.gravnet_layers[i](x, batch=batch)
+            out.append(x)
+        return torch.cat(out, dim=-1)
