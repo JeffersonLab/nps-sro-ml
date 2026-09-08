@@ -171,8 +171,13 @@ class BaseOcInferenceManager(ABC):
             self.hyperparameters = self.hyperparameters_type.from_mapping(
                 hyperparameters
             )
-        else:
+        elif isinstance(hyperparameters, self.hyperparameters_type):
             self.hyperparameters = hyperparameters
+        else:
+            raise TypeError(
+                f"Expected hyperparameters to be of type {self.hyperparameters_type} "
+                f"or a mapping, got {type(hyperparameters)} instead."
+            )
 
         self.event_idx = 0
         self.results = self.results_type()
@@ -191,7 +196,7 @@ class BaseOcInferenceManager(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def _infer(
+    def _infer_graph(
         self,
         *model_outputs: torch.Tensor,
     ) -> Mapping[str, Any]:
@@ -241,7 +246,21 @@ class BaseOcInferenceManager(ABC):
             b_mask = batch == b
             b_model_outputs = tuple(output[b_mask] for output in model_outputs)
 
-            inferred_attrs = self._infer(*b_model_outputs)
+            inferred_attrs = self._infer_graph(*b_model_outputs)
+
+            required_fields = [
+                "object_ids",
+                "x_c",
+                "beta",
+                "min_d",
+            ]
+
+            if set(required_fields) - set(inferred_attrs.keys()):
+                missing_fields = set(required_fields) - set(inferred_attrs.keys())
+                raise ValueError(
+                    f"Missing required inferred attributes: {missing_fields}"
+                )
+
             self.results.append(
                 # input data
                 event_id=self.event_idx,

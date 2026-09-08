@@ -36,10 +36,9 @@ def main(cfg: ConfigParser):
     model.eval()
 
     inference_cls = cfg.init_obj("inference")
-    hyperparams = BaseOcInferenceHyperparameters.from_mapping(cfg["inference"])
     inferencer = inference_cls(
         model,
-        hyperparameters=hyperparams,
+        hyperparameters=cfg["inference"],
     )
     results: BaseOcInferenceResults = inferencer.infer(tqdm(vdl))
 

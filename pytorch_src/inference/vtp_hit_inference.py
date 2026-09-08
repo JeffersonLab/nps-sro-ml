@@ -72,7 +72,7 @@ class VtpHitOcInferenceManager(BaseOcInferenceManager):
         pos = torch.stack([scaled_x, scaled_y], dim=-1)
         return x, pos
 
-    def _infer(
+    def _infer_graph(
         self,
         *model_outputs: tuple[torch.Tensor, ...],
     ) -> Mapping[str, Any]:
@@ -103,6 +103,8 @@ class VtpHitOcInferenceManager(BaseOcInferenceManager):
 
         return {
             "object_ids": object_ids,
+            "x_c": x_c,
+            "beta": beta,
             "min_d": min_d,
             "x_signal": x_signal,
             "is_triggered": torch.sigmoid(x_signal) > self.hyperparameters.sig_thres,
