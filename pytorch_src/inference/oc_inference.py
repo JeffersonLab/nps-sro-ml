@@ -1,13 +1,13 @@
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field, fields
-from pathlib import Path
-from typing import Any, ClassVar, Mapping
-
+import pathlib
+import warnings
 import pandas as pd
 import torch
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field, fields
+from typing import Any, ClassVar, Mapping
 
-from utils.graph import create_unique_object_ids
 from base.dataloader import BaseDataLoader
+from utils.utils import write_json
 
 
 @dataclass
@@ -128,11 +128,15 @@ class BaseOcInferenceResults:
                     exported[f"{name}_{index}"] = values[:, index].numpy()
         return exported
 
+    def to_json(self, filename: str | pathlib.Path) -> None:
+        """Write node-level results to a JSON file."""
+        write_json(self.to_dict(), filename)
+
     def to_df(self) -> pd.DataFrame:
         """Return node-level results as a DataFrame."""
         return pd.DataFrame(self.to_dict())
 
-    def to_csv(self, filename: str | Path, **kwargs) -> None:
+    def to_csv(self, filename: str | pathlib.Path, **kwargs) -> None:
         """Write node-level results to CSV."""
         kwargs.setdefault("index", False)
         self.to_df().to_csv(filename, **kwargs)
@@ -180,7 +184,12 @@ class BaseOcInferenceManager(ABC):
             )
 
         self.event_idx = 0
+        self.inferred = False
         self.results = self.results_type()
+
+    @property
+    def inferred_(self) -> bool:
+        return self.inferred
 
     @abstractmethod
     def _prepare_model_inputs(self, data: Any) -> tuple[torch.Tensor, ...]:
@@ -221,42 +230,62 @@ class BaseOcInferenceManager(ABC):
         beta = beta.squeeze(-1) if beta.ndim > 1 else beta
         return x_c, beta, *model_outputs[2:]
 
-    def _extract_truth_labels(self, data: Any) -> tuple[torch.Tensor, torch.Tensor]:
-        """Create unique truth IDs and the graph-membership vector."""
-        y = data.y.squeeze(-1).long()
-        batch = (
-            data.batch
-            if hasattr(data, "batch")
-            else torch.zeros(y.shape[0], dtype=torch.long, device=y.device)
-        )
+    @abstractmethod
+    def _extract_input_data(self, data: Any) -> Mapping[str, Any]:
+        """
+        Extract the input data required for the model from the given data object.
 
-        empty_idx = self.hyperparameters.empty_idx
-        truth_ids = create_unique_object_ids(y, batch, empty_idx)
-        return truth_ids, batch
+        Parameters
+        ----------
+        data : Any
+            The data object containing the input features.
+
+        Returns
+        -------
+        Mapping[str, Any]
+            A mapping of input names to their corresponding tensors.
+        """
+        raise NotImplementedError
 
     def _infer_batch(self, data: Any) -> None:
         """
         Perform inference on a batch of graphs.
         """
-        truth_ids, batch = self._extract_truth_labels(data)
+        input_data = self._extract_input_data(data)
+
+        required_input_fields = ["x", "pos", "truth_ids", "batch"]
+
+        if set(required_input_fields) - set(input_data.keys()):
+            missing_fields = set(required_input_fields) - set(input_data.keys())
+            raise ValueError(f"Missing required input data fields: {missing_fields}")
+
+        batch = input_data.pop("batch")
+        required_result_fields = ["x", "pos", "truth_ids"]
         model_inputs = self._prepare_model_inputs(data)
         model_outputs = self._evaluate_model(*model_inputs, batch=batch)
 
         for b in batch.unique(sorted=True):
-            b_mask = batch == b
-            b_model_outputs = tuple(output[b_mask] for output in model_outputs)
 
+            b_mask = batch == b
+            b_data = {key: val[b_mask] for key, val in input_data.items()}
+            b_model_outputs = tuple(output[b_mask] for output in model_outputs)
             inferred_attrs = self._infer_graph(*b_model_outputs)
 
-            required_fields = [
+            if set(required_result_fields) - set(b_data.keys()):
+                missing_fields = set(required_result_fields) - set(b_data.keys())
+                raise ValueError(
+                    f"Missing required input data fields: {missing_fields}"
+                )
+
+            required_infer_fields = [
                 "object_ids",
                 "x_c",
                 "beta",
                 "min_d",
             ]
 
-            if set(required_fields) - set(inferred_attrs.keys()):
-                missing_fields = set(required_fields) - set(inferred_attrs.keys())
+            if set(required_infer_fields) - set(inferred_attrs.keys()):
+                missing_fields = set(required_infer_fields) - set(inferred_attrs.keys())
                 raise ValueError(
                     f"Missing required inferred attributes: {missing_fields}"
                 )
@@ -264,15 +293,14 @@ class BaseOcInferenceManager(ABC):
             self.results.append(
                 # input data
                 event_id=self.event_idx,
-                x=data.x[b_mask],
-                pos=data.pos[b_mask],
-                truth_ids=truth_ids[b_mask],
+                # input data
+                **b_data,
                 # oc inferences
                 **inferred_attrs,
             )
             self.event_idx += 1
 
-    def infer(self, dataloader: BaseDataLoader) -> BaseOcInferenceResults:
+    def infer(self, dataloader: BaseDataLoader) -> "BaseOcInferenceManager":
         """
         Run the inference of the model on the provided dataloader and return the results.
 
@@ -283,16 +311,46 @@ class BaseOcInferenceManager(ABC):
 
         Returns
         -------
-        BaseOcInferenceResults
-            The results of the inference.
+        BaseOcInferenceManager
+            The inference manager containing the results.
         """
+        if self.inferred:
+            warnings.warn(
+                "Inference has already been run; skipping this call to avoid "
+                "appending duplicate results.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return self
+
         self.model.eval()
         device = next(self.model.parameters()).device
         with torch.no_grad():
             for data in dataloader:
                 data = data.to(device)
                 self._infer_batch(data)
-        return self.results
+
+        self.inferred = True
+        return self
+
+    def export(self, pth: pathlib.Path, **kwargs) -> None:
+
+        if not self.inferred:
+            raise RuntimeError(
+                "Inference has not been run yet. Please run infer() before exporting."
+            )
+
+        if pth.suffix == ".csv":
+            self.results.to_csv(pth, **kwargs)
+        elif pth.suffix == ".json":
+            self.results.to_json(pth, **kwargs)
+        else:
+            raise ValueError(f"Unsupported export format: {pth.suffix}")
+
+    @abstractmethod
+    def report(self, **kwargs: Any) -> None:
+        """Report the current status or results of the inference."""
+        pass
 
 
 def oc_inference_per_batch(
