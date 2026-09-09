@@ -19,6 +19,7 @@ from utils.utils import import_attr, prepare_device
 
 
 def main(cfg: ConfigParser):
+    """Run configured inference and write its complete report."""
     logger = cfg.get_logger("inference")
     dl = cfg.init_obj("data_loader", logger=logger)
     vdl = dl.split_validation()
@@ -40,19 +41,20 @@ def main(cfg: ConfigParser):
         model,
         hyperparameters=cfg["inference"],
     )
-    results: BaseOcInferenceResults = inferencer.infer(tqdm(vdl))
+    inferencer = inferencer.infer(tqdm(vdl))
 
-    save_dir = pathlib.Path(cfg.get("save_dir", None))
-    if save_dir is None or not save_dir.exists():
+    save_dir = cfg.get("save_dir", None)
+    if save_dir is None:
         save_dir = pathlib.Path(model_path.parent)
+    save_dir = pathlib.Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    results_path = save_dir / "results.csv"
-    results.to_csv(results_path, index=False)
-    logger.info(f"Saved inference results to {results_path}")
+    report_options = cfg.get("report", {}) or {}
+    inferencer.report(save_dir, **report_options)
 
 
 def load_model(resume):
+    """Restore a model from a training checkpoint."""
     checkpoint = torch.load(str(resume.absolute()), map_location="cpu")
     state_dict = checkpoint["state_dict"]
     model, _ = import_attr(
