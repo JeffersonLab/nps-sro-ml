@@ -1,10 +1,9 @@
 import pathlib
-from typing import Any, Optional
+from typing import Optional
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 
 _MPL_CONFIG = {
     "font.family": "serif",
@@ -139,8 +138,8 @@ def _draw_nps_hits(
     ax: plt.Axes,
     object_ids: np.ndarray,
     positions: np.ndarray,
-    bkg_ids: Optional[list[int]] = None,
-    ignore_ids: Optional[list[int]] = None,
+    bkg_ids: Optional[list[int] | int] = None,
+    ignore_ids: Optional[list[int] | int] = None,
     cmap: Optional[mpl.colors.Colormap] = None,
 ) -> None:
     """
@@ -154,10 +153,10 @@ def _draw_nps_hits(
         Array of object IDs
     positions : np.ndarray
         Array of object positions with shape (N, 2).
-    bkg_ids : Optional[list[int]], optional
+    bkg_ids : Optional[list[int]|int], optional
         List of background object IDs to be drawn as gray patches, by default None.
-    ignore_ids : Optional[int], optional
-        Single object ID to be ignored, by default None.
+    ignore_ids : Optional[list[int]|int], optional
+        Single object ID or list of object IDs to be ignored, by default None.
     cmap : Optional[mpl.colors.Colormap], optional
         Colormap to use for coloring the objects, by default None.
     """
@@ -167,6 +166,10 @@ def _draw_nps_hits(
 
     bkg_ids = [] if bkg_ids is None else bkg_ids
     ignore_ids = [] if ignore_ids is None else ignore_ids
+    if isinstance(bkg_ids, int):
+        bkg_ids = [bkg_ids]
+    if isinstance(ignore_ids, int):
+        ignore_ids = [ignore_ids]
 
     # Filter out ignored object IDs
     mask = ~np.isin(object_ids, ignore_ids)

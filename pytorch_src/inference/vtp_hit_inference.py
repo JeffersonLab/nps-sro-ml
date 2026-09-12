@@ -300,6 +300,6 @@ class VtpHitOcInferenceManager(BaseOcInferenceManager):
                         df_event["row"].to_numpy(),
                     ]
                 ),
-                empty_idx=self.hyperparameters.empty_idx,
+                bkg_ids=self.hyperparameters.empty_idx,
                 output_path=fig_dir / f"event_{i}_objects.png",
             )
