@@ -10,10 +10,6 @@ from tqdm import tqdm
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "pytorch_src"))
 
-from inference.oc_inference import (
-    BaseOcInferenceHyperparameters,
-    BaseOcInferenceResults,
-)
 from utils.config import ConfigParser
 from utils.utils import import_attr, prepare_device
 
@@ -36,11 +32,7 @@ def main(cfg: ConfigParser):
     model = model.to(device)
     model.eval()
 
-    inference_cls = cfg.init_obj("inference")
-    inferencer = inference_cls(
-        model,
-        hyperparameters=cfg["inference"],
-    )
+    inferencer = cfg.init_obj("inference", model)
     inferencer = inferencer.infer(tqdm(vdl))
 
     save_dir = cfg.get("save_dir", None)
