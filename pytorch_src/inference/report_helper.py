@@ -116,19 +116,17 @@ def plot_event_objects(
     for ax in axes:
         _draw_nps_frame(ax)
 
-    _draw_detector_hits(
+    _draw_nps_hits(
         axes[0],
         truth_ids,
         pos,
-        ignored_id=None,
-        noise_idx=[empty_idx],
+        bkg_ids=[empty_idx],
     )
-    _draw_detector_hits(
+    _draw_nps_hits(
         axes[1],
         pred_ids,
         pos,
-        ignored_id=None,
-        noise_idx=[empty_idx],
+        bkg_ids=[empty_idx],
     )
     axes[0].set_title(r"$\mathrm{Truth Objects}$", fontsize=12)
     axes[1].set_title(r"$\mathrm{Predicted Objects}$", fontsize=12)
@@ -137,64 +135,89 @@ def plot_event_objects(
     plt.close(fig)
 
 
-def _draw_detector_hits(
+def _draw_nps_hits(
     ax: plt.Axes,
     object_ids: np.ndarray,
     positions: np.ndarray,
-    noise_idx: list[int] = [],
-    ignored_id: Optional[int] = None,
+    bkg_ids: Optional[list[int]] = None,
+    ignore_ids: Optional[list[int]] = None,
     cmap: Optional[mpl.colors.Colormap] = None,
 ) -> None:
+    """
+    Draw hits as rectangular patches in exising ax.
+
+    Parameters
+    ----------
+    ax : plt.Axes
+        Matplotlib Axes object to draw the hits on.
+    object_ids : np.ndarray
+        Array of object IDs
+    positions : np.ndarray
+        Array of object positions with shape (N, 2).
+    bkg_ids : Optional[list[int]], optional
+        List of background object IDs to be drawn as gray patches, by default None.
+    ignore_ids : Optional[int], optional
+        Single object ID to be ignored, by default None.
+    cmap : Optional[mpl.colors.Colormap], optional
+        Colormap to use for coloring the objects, by default None.
+    """
 
     if cmap is None:
         cmap = mpl.colormaps["rainbow"]
 
-    if ignored_id is not None:
-        mask = object_ids != ignored_id
-        object_ids = object_ids[mask]
-        positions = positions[mask]
+    bkg_ids = [] if bkg_ids is None else bkg_ids
+    ignore_ids = [] if ignore_ids is None else ignore_ids
 
-    obj_mask = ~np.isin(object_ids, noise_idx)
+    # Filter out ignored object IDs
+    mask = ~np.isin(object_ids, ignore_ids)
+    object_ids = object_ids[mask]
+    positions = positions[mask]
+    if object_ids.size == 0:
+        return
+
+    obj_mask = ~np.isin(object_ids, bkg_ids)
     unique_ids = np.unique(object_ids[obj_mask])
-
     colors = cmap(np.linspace(0, 1, len(unique_ids)))
 
-    for i, oid in enumerate(unique_ids):
+    # hits from the same obj share color
+    for color, oid in zip(colors, unique_ids):
         mask = object_ids == oid
-        x = positions[mask, 0]
-        y = positions[mask, 1]
-        patch = mpl.patches.Rectangle(
-            xy=(x[0] - 0.5, y[0] - 0.5),
-            width=1.0,
-            height=1.0,
-            facecolor=colors[i],
-            edgecolor="black",
-            linewidth=0.5,
-        )
-        ax.add_patch(patch)
+        for x, y in zip(positions[mask, :2]):
+            patch = mpl.patches.Rectangle(
+                xy=(x - 0.5, y - 0.5),
+                width=1.0,
+                height=1.0,
+                facecolor=color,
+                edgecolor="black",
+                linewidth=0.5,
+            )
+            ax.add_patch(patch)
 
-    for i in noise_idx:
+    # all bkg hits in gray
+    for i in bkg_ids:
         mask = object_ids == i
-        x = positions[mask, 0]
-        y = positions[mask, 1]
-        if len(x) == 0 or len(y) == 0:
-            continue
-        patch = mpl.patches.Rectangle(
-            xy=(x[0] - 0.5, y[0] - 0.5),
-            width=1.0,
-            height=1.0,
-            facecolor="gray",
-            edgecolor="black",
-            linewidth=0.5,
-        )
-        ax.add_patch(patch)
+
+        for x, y in zip(positions[mask, :2]):
+            patch = mpl.patches.Rectangle(
+                xy=(x - 0.5, y - 0.5),
+                width=1.0,
+                height=1.0,
+                facecolor="gray",
+                edgecolor="black",
+                linewidth=0.5,
+            )
+            ax.add_patch(patch)
 
 
 def _draw_nps_frame(
-    ax: plt.Axes,
+    ax: Optional[plt.Axes] = None,
 ) -> None:
+    """Draw nps (30x36) grid on the given Axes."""
 
     from datasets.nps import NCOLS, NROWS
+
+    if ax is None:
+        ax = plt.gca()
 
     for i in range(NCOLS):
         ax.axvline(x=i - 0.5, color="gray", linewidth=0.35, alpha=0.8)
