@@ -1,13 +1,9 @@
 from .metrics import (
     accuracy_from_confusion,
-    background_confusion_matrix,
-    compute_clustering_metrics,
-    f1_from_confusion,
-    pairwise_cluster_confusion_matrix,
-    precision_from_confusion,
-    recall_from_confusion,
-    summarize_clustering_metrics,
+    clustering_scores,
+    prediction_scores,
 )
+
 from .oc_inference import (
     BaseOcInferenceHyperparameters,
     BaseOcInferenceManager,
@@ -33,13 +29,8 @@ __all__ = [
     "VtpHitOcInferenceResults",
     "VtpHitOcInferenceResultsPerGraph",
     "accuracy_from_confusion",
-    "background_confusion_matrix",
-    "compute_clustering_metrics",
-    "f1_from_confusion",
-    "pairwise_cluster_confusion_matrix",
-    "precision_from_confusion",
-    "recall_from_confusion",
-    "summarize_clustering_metrics",
+    "clustering_scores",
+    "prediction_scores",
     "oc_inference_per_batch",
     "oc_inference_per_graph",
 ]

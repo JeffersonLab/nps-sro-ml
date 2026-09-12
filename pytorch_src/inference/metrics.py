@@ -1,245 +1,213 @@
-from typing import Any
-
 import numpy as np
+from typing import Optional
+from sklearn.metrics import (
+    accuracy_score,
+    average_precision_score,
+    balanced_accuracy_score,
+    f1_score,
+    matthews_corrcoef,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+    adjusted_rand_score,
+    homogeneity_score,
+    completeness_score,
+    v_measure_score,
+    fowlkes_mallows_score,
+)
 
 
-def background_confusion_matrix(
-    object_ids: np.ndarray,
-    cluster_ids: np.ndarray,
-) -> np.ndarray:
-    true_background = object_ids < 0
-    pred_background = cluster_ids < 0
+def clustering_scores(truth: np.ndarray, prediction: np.ndarray) -> dict[str, float]:
+    """
+    Return common clustering metrics for predictions against ground truth.
 
-    return np.array(
-        [
-            [
-                np.sum(true_background & pred_background),
-                np.sum(true_background & ~pred_background),
-            ],
-            [
-                np.sum(~true_background & pred_background),
-                np.sum(~true_background & ~pred_background),
-            ],
-        ],
-        dtype=np.int64,
-    )
+    Parameters
+    ----------
+    truth : np.ndarray
+        Ground truth cluster labels.
+    prediction : np.ndarray
+        Predicted cluster labels.
 
-
-def pairwise_cluster_confusion_matrix(
-    event_ids: np.ndarray,
-    det_x: np.ndarray,
-    det_y: np.ndarray,
-    object_ids: np.ndarray,
-    cluster_ids: np.ndarray,
-    overlap_tolerant: bool = False,
-) -> np.ndarray:
-    pair_confusion = np.zeros((2, 2), dtype=np.int64)
-
-    event_blocks = _group_labels_by_block(
-        event_ids,
-        det_x,
-        det_y,
-        object_ids,
-        cluster_ids,
-    )
-
-    for block_map in event_blocks.values():
-        block_labels = list(block_map.values())
-        if len(block_labels) < 2:
-            continue
-
-        for left_idx in range(len(block_labels) - 1):
-            left_true = block_labels[left_idx]["true"]
-            left_pred = block_labels[left_idx]["pred"]
-            for right_idx in range(left_idx + 1, len(block_labels)):
-                right_true = block_labels[right_idx]["true"]
-                right_pred = block_labels[right_idx]["pred"]
-
-                # Position-aware and permutation-invariant: compare detector blocks and
-                # treat them as matching when they share at least one object/cluster ID.
-                true_same = bool(left_true.intersection(right_true))
-                pred_same = bool(left_pred.intersection(right_pred))
-
-                if overlap_tolerant:
-                    left_ambiguous = len(left_true) > 1
-                    right_ambiguous = len(right_true) > 1
-                    ambiguous_pair = left_ambiguous or right_ambiguous
-
-                    # For single-assignment methods, do not penalize ambiguous overlap
-                    # blocks when they would otherwise induce unavoidable FP/FN pairs.
-                    if ambiguous_pair and true_same != pred_same:
-                        continue
-
-                pair_confusion[int(true_same), int(pred_same)] += 1
-
-    return pair_confusion
+    Returns
+    -------
+    dict[str, float]
+        A dictionary containing the following metrics:
+        - "adjusted_rand": Adjusted Rand Index.
+        - "homogeneity": Homogeneity score.
+        - "completeness": Completeness score.
+        - "v_measure": V-measure score.
+        - "fowlkes_mallows": Fowlkes-Mallows score.
+    """
+    return {
+        "adjusted_rand": adjusted_rand_score(truth, prediction),
+        "homogeneity": homogeneity_score(truth, prediction),
+        "completeness": completeness_score(truth, prediction),
+        "v_measure": v_measure_score(truth, prediction),
+        "fowlkes_mallows": fowlkes_mallows_score(truth, prediction),
+    }
 
 
-def _group_labels_by_block(
-    event_ids: np.ndarray,
-    det_x: np.ndarray,
-    det_y: np.ndarray,
-    object_ids: np.ndarray,
-    cluster_ids: np.ndarray,
-) -> dict[int, dict[tuple[float, float], dict[str, set[int]]]]:
-    events: dict[int, dict[tuple[float, float], dict[str, set[int]]]] = {}
+def prediction_scores(
+    truth: np.ndarray,
+    prediction: np.ndarray,
+    prob: Optional[np.ndarray] = None,
+) -> dict[str, float]:
+    """
+    Return common binary-classification metrics for predictions against ground truth.
 
-    for event_id, x_pos, y_pos, object_id, cluster_id in zip(
-        event_ids,
-        det_x,
-        det_y,
-        object_ids,
-        cluster_ids,
-    ):
-        event_key = int(event_id)
-        block_key = (float(x_pos), float(y_pos))
-        block_map = events.setdefault(event_key, {})
-        label_sets = block_map.setdefault(block_key, {"true": set(), "pred": set()})
+    Parameters
+    ----------
+    truth : np.ndarray
+        Ground truth binary labels.
+    prediction : np.ndarray
+        Predicted binary labels.
+    prob : Optional[np.ndarray],
+        Predicted probabilities for the positive class. Required for ROC AUC and average precision calculation.
 
-        if object_id >= 0:
-            label_sets["true"].add(int(object_id))
-        if cluster_id >= 0:
-            label_sets["pred"].add(int(cluster_id))
+    Returns
+    -------
+    dict[str, float]
+        - "accuracy": Accuracy of the classifier.
+        - "precision": Positive-class precision.
+        - "recall": Positive-class recall.
+        - "f1": Positive-class F1 score.
+        - "balanced_accuracy": Balanced accuracy of the classifier.
+        - "matthews_correlation": Matthews correlation coefficient of the classifier.
+        - "roc_auc": ROC AUC score for the positive class (if `prob` is provided and there are two classes).
+        - "average_precision": Average precision score for the positive class (if `prob` is provided and there are two classes).
+    """
 
-    return events
+    metrics = {
+        "accuracy": accuracy_score(truth, prediction),
+        "precision": precision_score(truth, prediction, zero_division=0),
+        "recall": recall_score(truth, prediction, zero_division=0),
+        "f1": f1_score(truth, prediction, zero_division=0),
+        "balanced_accuracy": balanced_accuracy_score(truth, prediction),
+        "matthews_correlation": matthews_corrcoef(truth, prediction),
+        "roc_auc": None,
+        "average_precision": None,
+    }
+
+    if prob is not None and np.unique(truth).size == 2:
+        metrics["roc_auc"] = roc_auc_score(truth, prob)
+        metrics["average_precision"] = average_precision_score(truth, prob)
+
+    return metrics
+
+
+def metrics_from_confusion(confusion: np.ndarray) -> dict[str, float]:
+    """
+    Return common binary-classification metrics for a 2x2 matrix.
+
+    Parameters
+    ----------
+    confusion : np.ndarray
+        A 2x2 confusion matrix. The rows correspond to the true classes and the columns correspond to the predicted classes.
+
+    Returns
+    -------
+    dict[str, float]
+        A dictionary containing the following metrics:
+        - "accuracy": Accuracy of the classifier.
+        - "precision": Positive-class precision.
+        - "recall": Positive-class recall.
+        - "f1": Positive-class F1 score.
+    """
+    confusion = np.asarray(confusion)
+    if confusion.shape != (2, 2):
+        raise ValueError(f"Expected a 2x2 confusion matrix, got {confusion.shape}.")
+    return {
+        "accuracy": accuracy_from_confusion(confusion),
+        "precision": precision_from_confusion(confusion),
+        "recall": recall_from_confusion(confusion),
+        "f1": f1_from_confusion(confusion),
+    }
 
 
 def accuracy_from_confusion(confusion: np.ndarray) -> float:
-    return _safe_div(np.trace(confusion), confusion.sum())
+    """
+    Return accuracy for a 2x2 confusion matrix.
+
+    Parameters
+    ----------
+    confusion : np.ndarray
+        A 2x2 confusion matrix. The rows correspond to the true classes and the columns correspond to the predicted classes.
+
+    Returns
+    -------
+    float
+        Accuracy of the classifier.
+    """
+    tot = np.asarray(confusion).sum()
+    return np.divide(
+        np.trace(confusion),
+        tot,
+        where=tot != 0,
+        out=np.zeros_like(np.trace(confusion), dtype=float),
+    )
 
 
 def precision_from_confusion(confusion: np.ndarray) -> float:
-    tn, fp = confusion[0]
-    fn, tp = confusion[1]
-    return _safe_div(tp, tp + fp)
+    """
+    Return positive-class precision for a 2x2 confusion matrix.
+
+    Parameters
+    ----------
+    confusion : np.ndarray
+        A 2x2 confusion matrix. The rows correspond to the true classes and the columns correspond to the predicted classes.
+
+    Returns
+    -------
+    float
+        Positive-class precision of the classifier.
+    """
+    _, fp = confusion[0]
+    _, tp = confusion[1]
+    return np.divide(
+        tp, tp + fp, where=tp + fp != 0, out=np.zeros_like(tp, dtype=float)
+    )
 
 
 def recall_from_confusion(confusion: np.ndarray) -> float:
-    tn, fp = confusion[0]
+    """
+    Return positive-class recall for a 2x2 confusion matrix.
+
+    Parameters
+    ----------
+    confusion : np.ndarray
+        A 2x2 confusion matrix. The rows correspond to the true classes and the columns correspond to the predicted classes.
+
+    Returns
+    -------
+    float
+        Positive-class recall of the classifier.
+    """
+    _, _ = confusion[0]
     fn, tp = confusion[1]
-    return _safe_div(tp, tp + fn)
+    return np.divide(
+        tp, tp + fn, where=tp + fn != 0, out=np.zeros_like(tp, dtype=float)
+    )
 
 
 def f1_from_confusion(confusion: np.ndarray) -> float:
-    tn, fp = confusion[0]
+    """
+    Return positive-class F1 for a 2x2 confusion matrix.
+
+    Parameters
+    ----------
+    confusion : np.ndarray
+        A 2x2 confusion matrix. The rows correspond to the true classes and the columns correspond to the predicted classes.
+
+    Returns
+    -------
+    float
+        Positive-class F1 score of the classifier.
+    """
+    _, fp = confusion[0]
     fn, tp = confusion[1]
-    return _safe_f1(tp, fp, fn)
-
-
-def summarize_clustering_metrics(
-    event_ids: np.ndarray,
-    det_x: np.ndarray,
-    det_y: np.ndarray,
-    object_ids: np.ndarray,
-    cluster_ids: np.ndarray,
-    background_confusion: np.ndarray | None = None,
-    pair_confusion: np.ndarray | None = None,
-    pair_confusion_overlap_tolerant: np.ndarray | None = None,
-) -> dict[str, Any]:
-    background_confusion = (
-        background_confusion
-        if background_confusion is not None
-        else background_confusion_matrix(object_ids, cluster_ids)
+    return np.divide(
+        2 * tp,
+        2 * tp + fp + fn,
+        where=2 * tp + fp + fn != 0,
+        out=np.zeros_like(tp, dtype=float),
     )
-    pair_confusion = (
-        pair_confusion
-        if pair_confusion is not None
-        else pairwise_cluster_confusion_matrix(
-            event_ids,
-            det_x,
-            det_y,
-            object_ids,
-            cluster_ids,
-            overlap_tolerant=False,
-        )
-    )
-    pair_confusion_overlap_tolerant = (
-        pair_confusion_overlap_tolerant
-        if pair_confusion_overlap_tolerant is not None
-        else pairwise_cluster_confusion_matrix(
-            event_ids,
-            det_x,
-            det_y,
-            object_ids,
-            cluster_ids,
-            overlap_tolerant=True,
-        )
-    )
-
-    return {
-        "num_events": int(np.unique(event_ids).size),
-        "num_nodes": int(event_ids.size),
-        "background_accuracy": accuracy_from_confusion(background_confusion),
-        "background_precision": precision_from_confusion(background_confusion),
-        "background_recall": recall_from_confusion(background_confusion),
-        "background_f1": f1_from_confusion(background_confusion),
-        "pairwise_accuracy": accuracy_from_confusion(pair_confusion),
-        "pairwise_precision": precision_from_confusion(pair_confusion),
-        "pairwise_recall": recall_from_confusion(pair_confusion),
-        "pairwise_f1": f1_from_confusion(pair_confusion),
-        "pairwise_overlap_tolerant_accuracy": accuracy_from_confusion(
-            pair_confusion_overlap_tolerant
-        ),
-        "pairwise_overlap_tolerant_precision": precision_from_confusion(
-            pair_confusion_overlap_tolerant
-        ),
-        "pairwise_overlap_tolerant_recall": recall_from_confusion(
-            pair_confusion_overlap_tolerant
-        ),
-        "pairwise_overlap_tolerant_f1": f1_from_confusion(
-            pair_confusion_overlap_tolerant
-        ),
-    }
-
-
-def compute_clustering_metrics(
-    event_ids: np.ndarray,
-    det_x: np.ndarray,
-    det_y: np.ndarray,
-    object_ids: np.ndarray,
-    cluster_ids: np.ndarray,
-) -> dict[str, Any]:
-    background_confusion = background_confusion_matrix(object_ids, cluster_ids)
-    pair_confusion = pairwise_cluster_confusion_matrix(
-        event_ids,
-        det_x,
-        det_y,
-        object_ids,
-        cluster_ids,
-        overlap_tolerant=False,
-    )
-    pair_confusion_overlap_tolerant = pairwise_cluster_confusion_matrix(
-        event_ids,
-        det_x,
-        det_y,
-        object_ids,
-        cluster_ids,
-        overlap_tolerant=True,
-    )
-    summary = summarize_clustering_metrics(
-        event_ids,
-        det_x,
-        det_y,
-        object_ids,
-        cluster_ids,
-        background_confusion=background_confusion,
-        pair_confusion=pair_confusion,
-        pair_confusion_overlap_tolerant=pair_confusion_overlap_tolerant,
-    )
-
-    return {
-        "summary": summary,
-        "background_confusion": background_confusion,
-        "pair_confusion": pair_confusion,
-        "pair_confusion_overlap_tolerant": pair_confusion_overlap_tolerant,
-    }
-
-
-def _safe_div(num: float, den: float) -> float:
-    return float(num / den) if den else 0.0
-
-
-def _safe_f1(tp: float, fp: float, fn: float) -> float:
-    precision = _safe_div(tp, tp + fp)
-    recall = _safe_div(tp, tp + fn)
-    return _safe_div(2 * precision * recall, precision + recall)
