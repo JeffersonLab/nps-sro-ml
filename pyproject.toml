@@ -18,6 +18,7 @@ dependencies = [
     "requests>=2.33.0",
     "onnxscript>=0.7.0",
     "onnxruntime>=1.25.0",
+    "scikit-learn>=1.8",
     "tqdm",
     "black",
     "ruff",
