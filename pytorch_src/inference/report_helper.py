@@ -90,8 +90,8 @@ def plot_event_objects(
     truth_ids: np.ndarray,
     pred_ids: np.ndarray,
     pos: np.ndarray,
-    empty_idx: int,
-    output_path: pathlib.Path,
+    bkg_ids: Optional[list[int]] = None,
+    output_path: Optional[pathlib.Path] = None,
 ) -> None:
     """
     Plot the truth and predicted event objects on a 2D grid.
@@ -104,8 +104,8 @@ def plot_event_objects(
         Array of predicted object IDs.
     pos : np.ndarray
         Array of object positions with shape (N, 2).
-    empty_idx : int
-        Index representing empty positions.
+    bkg_ids : Optional[list[int]], optional
+        List of background object IDs to be drawn as gray patches, by default None.
     output_path : pathlib.Path
         Path to save the output plot.
 
@@ -120,13 +120,13 @@ def plot_event_objects(
         axes[0],
         truth_ids,
         pos,
-        bkg_ids=[empty_idx],
+        bkg_ids=bkg_ids,
     )
     _draw_nps_hits(
         axes[1],
         pred_ids,
         pos,
-        bkg_ids=[empty_idx],
+        bkg_ids=bkg_ids,
     )
     axes[0].set_title(r"$\mathrm{Truth Objects}$", fontsize=12)
     axes[1].set_title(r"$\mathrm{Predicted Objects}$", fontsize=12)
@@ -182,7 +182,8 @@ def _draw_nps_hits(
     # hits from the same obj share color
     for color, oid in zip(colors, unique_ids):
         mask = object_ids == oid
-        for x, y in zip(positions[mask, :2]):
+        for x, y in positions[mask, :2]:
+
             patch = mpl.patches.Rectangle(
                 xy=(x - 0.5, y - 0.5),
                 width=1.0,
@@ -197,7 +198,7 @@ def _draw_nps_hits(
     for i in bkg_ids:
         mask = object_ids == i
 
-        for x, y in zip(positions[mask, :2]):
+        for x, y in positions[mask, :2]:
             patch = mpl.patches.Rectangle(
                 xy=(x - 0.5, y - 0.5),
                 width=1.0,
@@ -227,6 +228,7 @@ def _draw_nps_frame(
     ax.set_xlim(-0.5, NCOLS - 0.5)
     ax.set_ylim(-0.5, NROWS - 0.5)
     ax.set_aspect("equal")
-    ax.set_xlabel(r"$\mathrm{Column}$", fontsize=12)
-    ax.set_ylabel(r"$\mathrm{Row}$", fontsize=12)
+    ax.grid(False)
+    ax.set_xlabel(r"$\mathrm{Column}$", fontsize=16)
+    ax.set_ylabel(r"$\mathrm{Row}$", fontsize=16)
     ax.grid(color="0.85", linewidth=0.35)

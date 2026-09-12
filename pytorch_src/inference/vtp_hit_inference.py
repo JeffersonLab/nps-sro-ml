@@ -280,8 +280,8 @@ class VtpHitOcInferenceManager(BaseOcInferenceManager):
         ):
             df_event = df_results[df_results["event_id"] == i]
             plot_event_objects(
-                truth_ids=df_event["truth_ids"].tolist(),
-                pred_ids=df_event["object_ids"].tolist(),
+                truth_ids=df_event["truth_ids"].to_numpy(),
+                pred_ids=df_event["object_ids"].to_numpy(),
                 pos=np.column_stack(
                     [
                         df_event["pos_0"].to_numpy(),
