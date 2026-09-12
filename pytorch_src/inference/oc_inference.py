@@ -41,9 +41,7 @@ class BaseOcInferenceResultsPerGraph:
 
     # original data
     event_id: int
-    x: torch.Tensor  # [num_nodes, features]
-    pos: torch.Tensor  # [num_nodes, detector_dimensions]
-    truth_ids: torch.Tensor  # [num_nodes]
+    # add truth information here. e.g. truth_ids, energy, time, etc ...
 
     # inference
     min_d: torch.Tensor  # [num_nodes]
@@ -106,7 +104,7 @@ class BaseOcInferenceResults:
         widths: dict[str, int] = {}
 
         for result in self.results:
-            num_nodes = result.x.shape[0]
+            num_nodes = result.object_ids.shape[0]
             for result_field in fields(result):
                 name = result_field.name
                 rows = self._as_rows(getattr(result, name), num_nodes, name)
@@ -192,14 +190,61 @@ class BaseOcInferenceManager(ABC):
         return self.inferred
 
     @abstractmethod
-    def _prepare_model_inputs(self, data: Any) -> tuple[torch.Tensor, ...]:
+    def _define_batch(self, data: Any) -> torch.Tensor:
+        """
+        Define the batch indices for the given data object.
+
+        Parameters
+        ----------
+        data : Any
+            The data object containing the input features.
+
+        Returns
+        -------
+        torch.Tensor
+            A tensor containing the batch indices for each node in the graph.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def _extract_truth(
+        self,
+        data: Any,
+        *,
+        batch: torch.Tensor,
+    ) -> Mapping[str, Any]:
+        """
+        Extract the ground truth information required in inherited BaseOcInferenceResultsPerGraph.
+
+        Parameters
+        ----------
+        data : Any
+            The data object containing the input features.
+
+        Returns
+        -------
+        Mapping[str, Any]
+            A mapping of input names to their corresponding tensors.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def _prepare_model_inputs(
+        self,
+        data: Any,
+    ) -> tuple[torch.Tensor, ...]:
         """
         Prepare the model inputs from the data object. This method should be implemented in subclasses to extract the necessary features from the data object and return them as a tuple of tensors.
 
         Parameters
         ----------
         data : Any
-            The data object containing the input features. Must contain attributes `y`, `batch`.
+            The data object containing the input features.
+
+        Returns
+        -------
+        tuple[torch.Tensor, ...]
+            A tuple containing the prepared model inputs.
 
         """
         raise NotImplementedError
@@ -216,6 +261,11 @@ class BaseOcInferenceManager(ABC):
         ----------
         model_outputs : tuple[torch.Tensor, ...]
             The outputs from the model evaluation. The first two elements are expected to be the latent positions and condensation strengths.
+
+        Returns
+        -------
+        Mapping[str, Any]
+            A mapping of output names to their corresponding tensors.
         """
         raise NotImplementedError
 
@@ -230,37 +280,12 @@ class BaseOcInferenceManager(ABC):
         beta = beta.squeeze(-1) if beta.ndim > 1 else beta
         return x_c, beta, *model_outputs[2:]
 
-    @abstractmethod
-    def _extract_input_data(self, data: Any) -> Mapping[str, Any]:
-        """
-        Extract the input data required for the model from the given data object.
-
-        Parameters
-        ----------
-        data : Any
-            The data object containing the input features.
-
-        Returns
-        -------
-        Mapping[str, Any]
-            A mapping of input names to their corresponding tensors.
-        """
-        raise NotImplementedError
-
     def _infer_batch(self, data: Any) -> None:
         """
         Perform inference on a batch of graphs.
         """
-        input_data = self._extract_input_data(data)
-
-        required_input_fields = ["x", "pos", "truth_ids", "batch"]
-
-        if set(required_input_fields) - set(input_data.keys()):
-            missing_fields = set(required_input_fields) - set(input_data.keys())
-            raise ValueError(f"Missing required input data fields: {missing_fields}")
-
-        batch = input_data.pop("batch")
-        required_result_fields = ["x", "pos", "truth_ids"]
+        batch = self._define_batch(data)
+        input_data = self._extract_truth(data, batch=batch)
         model_inputs = self._prepare_model_inputs(data)
         model_outputs = self._evaluate_model(*model_inputs, batch=batch)
 
@@ -270,12 +295,6 @@ class BaseOcInferenceManager(ABC):
             b_data = {key: val[b_mask] for key, val in input_data.items()}
             b_model_outputs = tuple(output[b_mask] for output in model_outputs)
             inferred_attrs = self._infer_graph(*b_model_outputs)
-
-            if set(required_result_fields) - set(b_data.keys()):
-                missing_fields = set(required_result_fields) - set(b_data.keys())
-                raise ValueError(
-                    f"Missing required input data fields: {missing_fields}"
-                )
 
             required_infer_fields = [
                 "object_ids",
@@ -307,7 +326,7 @@ class BaseOcInferenceManager(ABC):
         Parameters
         ----------
         dataloader : BaseDataLoader
-            A dataloader that yields batches of graph data. Requires that each batch has attributes `y` and `batch` for truth labels and graph membership.
+            A dataloader that yields batches of graph data.
 
         Returns
         -------

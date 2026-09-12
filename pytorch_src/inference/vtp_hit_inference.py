@@ -33,13 +33,18 @@ class VtpHitOcInferenceHyperparameters(BaseOcInferenceHyperparameters):
 class VtpHitOcInferenceResultsPerGraph(BaseOcInferenceResultsPerGraph):
     """Hit-level OC results for one event."""
 
-    cluster_type: (
-        torch.Tensor
-    )  # truth cluster type for each hit [0 = not triggered, 1 = triggered]
-    trigger_logit: torch.Tensor  # model output logits for trigger classification
-    trigger_probability: (
-        torch.Tensor
-    )  # model output probabilities for trigger classification
+    energy: torch.Tensor  # calibrated en, mev
+    time: torch.Tensor  # timestamp, not ns
+    col: torch.Tensor
+    row: torch.Tensor
+    cluster_type: torch.Tensor  # [0 = not triggered, 1 = triggered]
+    truth_ids: torch.Tensor  # unique object IDs for the ground truth hits
+
+    # model output logits for trigger classification
+    trigger_logit: torch.Tensor
+
+    # model output probabilities for trigger classification
+    trigger_probability: torch.Tensor
     is_triggered: torch.Tensor  # binary prediction for trigger classification
 
 
@@ -68,42 +73,49 @@ class VtpHitOcInferenceManager(BaseOcInferenceManager):
     ):
         super().__init__(model, hyperparameters)
 
-    def _prepare_model_inputs(self, data: Any) -> tuple[torch.Tensor, ...]:
+    def _define_batch(self, data: Any) -> torch.Tensor:
+        batch = getattr(data, "batch", None)
+        if batch is None:
+            return torch.zeros(data.x.shape[0], dtype=torch.long, device=data.x.device)
+        return batch
+
+    def _extract_truth(
+        self,
+        data: Any,
+        *,
+        batch: torch.Tensor,
+    ) -> Mapping[str, Any]:
+
+        y = data.y.squeeze(-1).long()
+        empty_idx = self.hyperparameters.empty_idx
+        truth_ids = create_unique_object_ids(y, batch, empty_idx)
+        return {
+            "energy": data.x[:, 0],
+            "time": data.x[:, 1],
+            "col": data.pos[:, 0],
+            "row": data.pos[:, 1],
+            "cluster_type": data.cluster_type,
+            "truth_ids": truth_ids,
+        }
+
+    def _prepare_model_inputs(
+        self,
+        data: Any,
+    ) -> tuple[torch.Tensor, ...]:
         """Scale raw energy, time, and detector coordinates for the hit model."""
-        num_columns = 30
-        num_rows = 36
-        num_time_bins = 110
+        from datasets.nps import NCOLS, NROWS, NTIME
 
         energy = data.x[:, 0]
-        scaled_time = 2 * data.x[:, 1] / num_time_bins - 1
+        scaled_time = 2 * data.x[:, 1] / NTIME - 1
         scaled_energy = energy / 1600
         log_energy = torch.log1p(energy)
 
-        scaled_x = 2 * data.pos[:, 0] / num_columns - 1
-        scaled_y = 2 * data.pos[:, 1] / num_rows - 1
+        scaled_x = 2 * data.pos[:, 0] / NCOLS - 1
+        scaled_y = 2 * data.pos[:, 1] / NROWS - 1
 
         x = torch.stack([scaled_energy, log_energy, scaled_time], dim=-1)
         pos = torch.stack([scaled_x, scaled_y], dim=-1)
         return x, pos
-
-    def _extract_input_data(self, data: Any) -> Mapping[str, Any]:
-
-        y = data.y.squeeze(-1).long()
-        batch = (
-            data.batch
-            if hasattr(data, "batch")
-            else torch.zeros(y.shape[0], dtype=torch.long, device=y.device)
-        )
-
-        empty_idx = self.hyperparameters.empty_idx
-        truth_ids = create_unique_object_ids(y, batch, empty_idx)
-        return {
-            "truth_ids": truth_ids,
-            "x": data.x,
-            "pos": data.pos,
-            "batch": batch,
-            "cluster_type": data.cluster_type,
-        }
 
     def _infer_graph(
         self,
@@ -284,8 +296,8 @@ class VtpHitOcInferenceManager(BaseOcInferenceManager):
                 pred_ids=df_event["object_ids"].to_numpy(),
                 pos=np.column_stack(
                     [
-                        df_event["pos_0"].to_numpy(),
-                        df_event["pos_1"].to_numpy(),
+                        df_event["col"].to_numpy(),
+                        df_event["row"].to_numpy(),
                     ]
                 ),
                 empty_idx=self.hyperparameters.empty_idx,
