@@ -1,8 +1,10 @@
 import torch
 import pathlib
 import numpy as np
+import matplotlib.pyplot as plt
+from collections import Counter
 from dataclasses import dataclass
-from typing import Any, ClassVar, Mapping
+from typing import Any, ClassVar, Mapping, Optional
 from sklearn.metrics import confusion_matrix
 from sklearn.metrics.cluster import pair_confusion_matrix
 
@@ -14,11 +16,18 @@ from .oc_inference import (
     oc_inference_per_graph,
 )
 
-from .report_helper import plot_confusion_matrix, plot_event_objects
 from .metrics import metrics_from_confusion, prediction_scores, clustering_scores
 
 from utils.utils import write_json
 from utils.graph import create_unique_object_ids
+
+from .report_helper import (
+    get_obj_stats,
+    plot_distributions,
+    plot_beta_distribution,
+    plot_min_distance_distribution,
+    plot_confusion_matrix,
+)
 
 
 @dataclass
@@ -176,92 +185,23 @@ class VtpHitOcInferenceManager(BaseOcInferenceManager):
         """
         save_dir = pathlib.Path(save_dir)
         save_dir.mkdir(parents=True, exist_ok=True)
-
-        df_results = self.results.to_df()
-        if df_results.empty:
-            raise ValueError("No inference results available.")
-
-        self.export(save_dir / "results.csv", index=False)
-        self.export(save_dir / "results.json")
-
-        trig_cm = np.zeros((2, 2), dtype=int)
-        hit_cm = np.zeros((2, 2), dtype=int)
-        clustering_metrics = []
-
-        if (df_results["truth_ids"] == self.hyperparameters.empty_idx).any():
-            raise RuntimeError("Empty truth IDs found in the results.")
-
-        unique_events = df_results["event_id"].unique()
-
-        for i in unique_events:
-            df_event = df_results[df_results["event_id"] == i]
-
-            trig_cm += confusion_matrix(
-                df_event["cluster_type"],
-                df_event["is_triggered"],
-                labels=[0, 1],
-            )
-
-            num_unassigned = (
-                df_event["object_ids"] == self.hyperparameters.empty_idx
-            ).sum()
-
-            df_event.loc[
-                df_event["object_ids"] == self.hyperparameters.empty_idx, "object_ids"
-            ] = range(
-                df_event["object_ids"].max() + 1,
-                df_event["object_ids"].max() + 1 + num_unassigned,
-            )
-
-            truth_ids = df_event["truth_ids"]
-            object_ids = df_event["object_ids"]
-
-            hit_cm += pair_confusion_matrix(truth_ids, object_ids)
-
-            clustering_metrics.append(clustering_scores(truth_ids, object_ids))
-
-        hit_metrics = metrics_from_confusion(hit_cm)
-
-        clus_metrics = (
-            {
-                name: {
-                    "mean": float(np.mean([m[name] for m in clustering_metrics])),
-                    "std": float(np.std([m[name] for m in clustering_metrics])),
-                }
-                for name in clustering_metrics[0].keys()
-            }
-            if clustering_metrics
-            else {}
-        )
-
-        trig_metrics = prediction_scores(
-            truth=df_results["cluster_type"],
-            prediction=df_results["is_triggered"],
-            prob=df_results["trigger_probability"],
-        )
-
-        write_json(
-            {
-                "num_events": int(df_results["event_id"].nunique()),
-                "num_hits": int(len(df_results)),
-                "hit_aggregation": {
-                    **hit_metrics,
-                    "event_metrics": clus_metrics,
-                },
-                "trigger": trig_metrics,
-                "confusion_matrices": {
-                    "hit_aggregation": hit_cm,
-                    "trigger": trig_cm,
-                },
-            },
-            save_dir / "metrics.json",
-        )
-
         fig_dir = save_dir / "figures"
         fig_dir.mkdir(parents=True, exist_ok=True)
 
+        results = self.results.to_dict()
+        self.export(save_dir / "results.csv", index=False)
+        self.export(save_dir / "results.json")
+
+        stats_summary: dict[str, Counter] = collect_stats_summary(
+            results, bkg_ids=[self.hyperparameters.empty_idx]
+        )
+        metrics = get_metrics(results, bkg_ids=[self.hyperparameters.empty_idx])
+
+        write_json(stats_summary, save_dir / "stats_summary.json")
+        write_json(metrics, save_dir / "metrics.json")
+
         plot_confusion_matrix(
-            trig_cm,
+            metrics["trig_cm"],
             row_labels=[r"$\mathrm{Not\ Triggered}$", r"$\mathrm{Triggered}$"],
             column_labels=[r"$\mathrm{Not\ Triggered}$", r"$\mathrm{Triggered}$"],
             title=r"$\mathrm{Trigger\ Confusion\ Matrix}$",
@@ -269,7 +209,7 @@ class VtpHitOcInferenceManager(BaseOcInferenceManager):
         )
 
         plot_confusion_matrix(
-            hit_cm,
+            metrics["aggr_cm"],
             row_labels=[
                 r"$\mathrm{Truth\ Different\ Object}$",
                 r"$\mathrm{Truth\ Same\ Object}$",
@@ -282,24 +222,419 @@ class VtpHitOcInferenceManager(BaseOcInferenceManager):
             output_path=fig_dir / "hit_confusion_matrix.png",
         )
 
-        seed = kwargs.pop("seed", 42)
-        nplots = kwargs.pop("num_det_plots", 10)
+        plot_confusion_matrix(
+            metrics["trig_aggr_cm"],
+            row_labels=[
+                r"$\mathrm{Truth\ Different\ Object}$",
+                r"$\mathrm{Truth\ Same\ Object}$",
+            ],
+            column_labels=[
+                r"$\mathrm{Predicted\ Different\ Object}$",
+                r"$\mathrm{Predicted\ Same\ Object}$",
+            ],
+            title=r"$\mathrm{Triggered\ Hit\ Aggregation\ Confusion\ Matrix}$",
+            output_path=fig_dir / "triggered_hit_confusion_matrix.png",
+        )
 
-        rng = np.random.default_rng(seed)
+        plot_beta_distribution(
+            beta=results["beta"],
+            output_path=fig_dir / "beta_distribution.png",
+        )
+        plot_min_distance_distribution(
+            min_d=results["min_d"],
+            output_path=fig_dir / "min_distance_distribution.png",
+        )
 
-        for i in rng.choice(
-            unique_events, size=min(nplots, len(unique_events)), replace=False
-        ):
-            df_event = df_results[df_results["event_id"] == i]
-            plot_event_objects(
-                truth_ids=df_event["truth_ids"].to_numpy(),
-                pred_ids=df_event["object_ids"].to_numpy(),
-                pos=np.column_stack(
-                    [
-                        df_event["col"].to_numpy(),
-                        df_event["row"].to_numpy(),
-                    ]
-                ),
-                bkg_ids=self.hyperparameters.empty_idx,
-                output_path=fig_dir / f"event_{i}_objects.png",
+        plot_obj_size_distribution(
+            true_trig_obj_size=stats_summary["true_trig"]["obj_sizes"],
+            true_non_trig_obj_size=stats_summary["true_non_trig"]["obj_sizes"],
+            pred_trig_obj_size=stats_summary["pred_trig"]["obj_sizes"],
+            pred_non_trig_obj_size=stats_summary["pred_non_trig"]["obj_sizes"],
+            output_path=fig_dir / "object_size_distribution.png",
+        )
+
+        plot_num_objects_distribution(
+            true_trig_nobjs=stats_summary["true_trig"]["nobjs"],
+            true_non_trig_nobjs=stats_summary["true_non_trig"]["nobjs"],
+            pred_trig_nobjs=stats_summary["pred_trig"]["nobjs"],
+            pred_non_trig_nobjs=stats_summary["pred_non_trig"]["nobjs"],
+            output_path=fig_dir / "num_objects_distribution.png",
+        )
+
+        generate_event_object_plots(
+            event_ids=results["event_id"],
+            truth_ids=results["truth_ids"],
+            pred_ids=results["object_ids"],
+            pos=np.column_stack(
+                [
+                    results["col"],
+                    results["row"],
+                ]
+            ),
+            bkg_ids=self.hyperparameters.empty_idx,
+            fig_dir=fig_dir / "event_objects",
+            seed=kwargs.get("seed", 42),
+            nplots=kwargs.get("num_det_plots", 10),
+        )
+
+
+def plot_obj_size_distribution(
+    true_trig_obj_size: dict[int, int],
+    true_non_trig_obj_size: dict[int, int],
+    pred_trig_obj_size: dict[int, int],
+    pred_non_trig_obj_size: dict[int, int],
+    output_path: Optional[pathlib.Path] = None,
+) -> None:
+
+    true_trig_sizes = list(true_trig_obj_size.keys())
+    true_trig_counts = list(true_trig_obj_size.values())
+    true_non_trig_sizes = list(true_non_trig_obj_size.keys())
+    true_non_trig_counts = list(true_non_trig_obj_size.values())
+    pred_trig_sizes = list(pred_trig_obj_size.keys())
+    pred_trig_counts = list(pred_trig_obj_size.values())
+    pred_non_trig_sizes = list(pred_non_trig_obj_size.keys())
+    pred_non_trig_counts = list(pred_non_trig_obj_size.values())
+
+    max_size = max(
+        set(
+            true_trig_sizes
+            + true_non_trig_sizes
+            + pred_trig_sizes
+            + pred_non_trig_sizes
+        )
+    )
+
+    fig, ax = plot_distributions(
+        arrs=[
+            true_trig_sizes,
+            true_non_trig_sizes,
+            pred_trig_sizes,
+            pred_non_trig_sizes,
+        ],
+        bins=max_size,
+        range=(0, max_size),
+        weights=[
+            true_trig_counts,
+            true_non_trig_counts,
+            pred_trig_counts,
+            pred_non_trig_counts,
+        ],
+        hist_kwargs=[
+            {
+                "histtype": "stepfilled",
+                "color": "blue",
+                "alpha": 0.7,
+                "label": r"$\mathrm{true\ trig}$",
+            },
+            {
+                "histtype": "stepfilled",
+                "color": "orange",
+                "alpha": 0.7,
+                "label": r"$\mathrm{true\ non-trig}$",
+            },
+            {
+                "histtype": "stepfilled",
+                "color": "green",
+                "alpha": 0.7,
+                "label": r"$\mathrm{pred\ trig}$",
+            },
+            {
+                "histtype": "stepfilled",
+                "color": "red",
+                "alpha": 0.7,
+                "label": r"$\mathrm{pred\ non-trig}$",
+            },
+        ],
+        fig_kwargs={"figsize": (5, 4), "constrained_layout": True, "dpi": 300},
+    )
+    ax.set_xlabel(r"$\mathrm{Object\ Size}$")
+    ax.set_ylabel(r"$\mathrm{Counts}$")
+    ax.legend(
+        loc="best",
+        fontsize=10,
+        frameon=False,
+    )
+
+    if output_path is not None:
+        fig.savefig(output_path, dpi=300)
+    plt.close(fig)
+
+
+def plot_num_objects_distribution(
+    true_trig_nobjs: dict[int, int],
+    true_non_trig_nobjs: dict[int, int],
+    pred_trig_nobjs: dict[int, int],
+    pred_non_trig_nobjs: dict[int, int],
+    output_path: Optional[pathlib.Path] = None,
+) -> None:
+
+    true_trig_nobjs_ = list(true_trig_nobjs.keys())
+    true_trig_nobjs_counts = list(true_trig_nobjs.values())
+    true_non_trig_nobjs_ = list(true_non_trig_nobjs.keys())
+    true_non_trig_nobjs_counts = list(true_non_trig_nobjs.values())
+    pred_trig_nobjs_ = list(pred_trig_nobjs.keys())
+    pred_trig_nobjs_counts = list(pred_trig_nobjs.values())
+    pred_non_trig_nobjs_ = list(pred_non_trig_nobjs.keys())
+    pred_non_trig_nobjs_counts = list(pred_non_trig_nobjs.values())
+
+    max_size = max(
+        set(
+            true_trig_nobjs_
+            + true_non_trig_nobjs_
+            + pred_trig_nobjs_
+            + pred_non_trig_nobjs_
+        )
+    )
+
+    fig, ax = plot_distributions(
+        arrs=[
+            true_trig_nobjs_,
+            true_non_trig_nobjs_,
+            pred_trig_nobjs_,
+            pred_non_trig_nobjs_,
+        ],
+        bins=max_size,
+        range=(0, max_size),
+        weights=[
+            true_trig_nobjs_counts,
+            true_non_trig_nobjs_counts,
+            pred_trig_nobjs_counts,
+            pred_non_trig_nobjs_counts,
+        ],
+        hist_kwargs=[
+            {
+                "histtype": "stepfilled",
+                "color": "blue",
+                "alpha": 0.7,
+                "label": r"$\mathrm{true\ trig}$",
+            },
+            {
+                "histtype": "stepfilled",
+                "color": "orange",
+                "alpha": 0.7,
+                "label": r"$\mathrm{true\ non-trig}$",
+            },
+            {
+                "histtype": "stepfilled",
+                "color": "green",
+                "alpha": 0.7,
+                "label": r"$\mathrm{pred\ trig}$",
+            },
+            {
+                "histtype": "stepfilled",
+                "color": "red",
+                "alpha": 0.7,
+                "label": r"$\mathrm{pred\ non-trig}$",
+            },
+        ],
+        fig_kwargs={"figsize": (5, 4), "constrained_layout": True, "dpi": 300},
+    )
+    ax.set_xlabel(r"$\mathrm{Number\ of\ Objects}$")
+    ax.set_ylabel(r"$\mathrm{Counts}$")
+    ax.legend(
+        loc="best",
+        fontsize=10,
+        frameon=False,
+    )
+
+    if output_path is not None:
+        fig.savefig(output_path, dpi=300)
+    plt.close(fig)
+
+
+def get_metrics(
+    results: Mapping[str, np.ndarray] | VtpHitOcInferenceResults, bkg_ids: list[int]
+):
+    if isinstance(results, VtpHitOcInferenceResults):
+        results = results.to_dict()
+    elif isinstance(results, Mapping):
+        # required_fields = VtpHitOcInferenceResults.__annotations__.keys()
+        # for field in required_fields:
+        #     if field not in results:
+        #         raise ValueError(f"Missing required field: {field}")
+        pass
+
+    trig_cm = np.zeros((2, 2), dtype=int)
+    aggr_cm = np.zeros((2, 2), dtype=int)
+    trig_aggr_cm = np.zeros((2, 2), dtype=int)
+    clus_metrics = []
+    trig_clus_metrics = []
+
+    unique_events = np.unique(results["event_id"])
+
+    for i in unique_events:
+        mask = results["event_id"] == i
+        result = {k: v[mask] for k, v in results.items()}
+
+        trig_cm += confusion_matrix(
+            result["cluster_type"],
+            result["is_triggered"],
+            labels=[0, 1],
+        )
+
+        is_bkg = np.isin(result["object_ids"], bkg_ids)
+        num_unassigned = is_bkg.sum()
+
+        object_ids = result["object_ids"]
+        object_ids[is_bkg] = range(
+            result["object_ids"].max() + 1,
+            result["object_ids"].max() + 1 + num_unassigned,
+        )
+
+        truth_ids = result["truth_ids"]
+
+        aggr_cm += pair_confusion_matrix(truth_ids, object_ids)
+        clus_metrics.append(clustering_scores(truth_ids, object_ids))
+
+        # aggregation confusion matrix gated on true triggered hits
+        trig_aggr_cm += pair_confusion_matrix(
+            truth_ids[result["cluster_type"] == 1],
+            object_ids[result["cluster_type"] == 1],
+        )
+        trig_clus_metrics.append(
+            clustering_scores(
+                truth_ids[result["cluster_type"] == 1],
+                object_ids[result["cluster_type"] == 1],
             )
+        )
+
+    hit_metrics = metrics_from_confusion(aggr_cm)
+
+    clus_metrics = (
+        {
+            name: {
+                "mean": float(np.mean([m[name] for m in clus_metrics])),
+                "std": float(np.std([m[name] for m in clus_metrics])),
+            }
+            for name in clus_metrics[0].keys()
+        }
+        if clus_metrics
+        else {}
+    )
+
+    trig_metrics = prediction_scores(
+        truth=results["cluster_type"],
+        prediction=results["is_triggered"],
+        prob=results["trigger_probability"],
+    )
+
+    return {
+        "num_events": len(unique_events),
+        "num_hits": len(results["object_ids"]),
+        "aggr_cm": aggr_cm,
+        "trig_cm": trig_cm,
+        "trig_aggr_cm": trig_aggr_cm,
+        "clus_metrics": clus_metrics,
+        "trig_clus_metrics": trig_clus_metrics,
+        "hit_metrics": hit_metrics,
+        "trig_metrics": trig_metrics,
+    }
+
+
+def collect_stats_summary(
+    results: dict[str, np.ndarray] | VtpHitOcInferenceResults, bkg_ids: list[int]
+):
+    """
+    Collect statistics summary for different object categories based on trigger status.
+
+    Parameters
+    ----------
+    results : dict[str, np.ndarray]
+        Dictionary containing the results with required fields.
+    bkg_ids : list[int]
+        List of background object IDs.
+
+    Returns
+    -------
+    stats_summary : dict[str, Any]
+        Dictionary containing statistics summary for different object categories, see `get_obj_stats`.
+
+    """
+    if isinstance(results, VtpHitOcInferenceResults):
+        results = results.to_dict()
+
+    required_fields = ["cluster_type", "is_triggered", "event_id", "object_ids"]
+    for field in required_fields:
+        if field not in results:
+            raise ValueError(f"Missing required field: {field}")
+
+    true_trig_mask = results["cluster_type"] == 1
+    pred_trig_mask = results["is_triggered"] == 1
+    true_non_trig_mask = results["cluster_type"] == 0
+    pred_non_trig_mask = results["is_triggered"] == 0
+
+    true_trig_obj_stats = get_obj_stats(
+        results["event_id"][true_trig_mask],
+        results["object_ids"][true_trig_mask],
+        bkg_ids=bkg_ids,
+    )
+
+    pred_trig_obj_stats = get_obj_stats(
+        results["event_id"][pred_trig_mask],
+        results["object_ids"][pred_trig_mask],
+        bkg_ids=bkg_ids,
+    )
+
+    true_all_obj_stats = get_obj_stats(
+        results["event_id"],
+        results["object_ids"],
+        bkg_ids=bkg_ids,
+    )
+    pred_all_obj_stats = get_obj_stats(
+        results["event_id"],
+        results["object_ids"],
+        bkg_ids=bkg_ids,
+    )
+
+    true_non_trig_obj_stats = get_obj_stats(
+        results["event_id"][true_non_trig_mask],
+        results["object_ids"][true_non_trig_mask],
+        bkg_ids=bkg_ids,
+    )
+
+    pred_non_trig_obj_stats = get_obj_stats(
+        results["event_id"][pred_non_trig_mask],
+        results["object_ids"][pred_non_trig_mask],
+        bkg_ids=bkg_ids,
+    )
+
+    stats_summary = {
+        "true_trig": true_trig_obj_stats,
+        "pred_trig": pred_trig_obj_stats,
+        "true_all": true_all_obj_stats,
+        "pred_all": pred_all_obj_stats,
+        "true_non_trig": true_non_trig_obj_stats,
+        "pred_non_trig": pred_non_trig_obj_stats,
+    }
+    return stats_summary
+
+
+def generate_event_object_plots(
+    event_ids: np.ndarray,
+    truth_ids: np.ndarray,
+    pred_ids: np.ndarray,
+    pos: np.ndarray,
+    bkg_ids: list[int],
+    fig_dir: pathlib.Path,
+    seed: int = 42,
+    nplots: int = 10,
+):
+    """
+    Helper function to generate nplots of truth vs pred hits on nps geometry.
+    """
+    from .report_helper import plot_event_objects
+
+    unique_events = np.unique(event_ids)
+    rng = np.random.default_rng(seed)
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    for i, evt_id in enumerate(
+        rng.choice(unique_events, size=min(nplots, len(unique_events)), replace=False)
+    ):
+        mask = event_ids == evt_id
+        plot_event_objects(
+            truth_ids=truth_ids[mask],
+            pred_ids=pred_ids[mask],
+            pos=pos[mask],
+            bkg_ids=bkg_ids,
+            output_path=fig_dir / f"{i:04d}.png",
+        )
