@@ -1,6 +1,7 @@
+import logging
 import pathlib
-from typing import Optional
-
+from typing import Optional, Sequence
+from collections import Counter
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
@@ -20,6 +21,204 @@ _MPL_CONFIG = {
 }
 
 mpl.rcParams.update(_MPL_CONFIG)
+mpl.use("Agg")
+logging.getLogger("matplotlib").setLevel(logging.ERROR)
+
+
+def plot_distributions(
+    arrs: Sequence[np.ndarray],
+    bins: int = 100,
+    range: tuple[float, float] = (0, 1),
+    weights: Optional[Sequence[np.ndarray]] = None,
+    hist_kwargs: Optional[dict] = None,
+    fig_kwargs: Optional[dict] = None,
+    output_path: Optional[pathlib.Path] = None,
+) -> tuple[mpl.figure.Figure, mpl.axes.Axes] | None:
+    """
+    Plot multiple distributions as 1D histograms.
+
+    Parameters
+    ----------
+    arrs : Sequence[np.ndarray]
+        List of 1D arrays to plot as histograms.
+    bins : int
+        Number of bins for the histograms. Default is 100.
+    range : tuple[float, float], optional
+        The lower and upper range of the bins. Default is (0, 1).
+    weights : Optional[Sequence[np.ndarray]], optional
+        Weights for each array. Default is None.
+    hist_kwargs : Optional[dict], optional
+        Additional keyword arguments for the histograms. Default is None.
+    fig_kwargs : Optional[dict], optional
+        Additional keyword arguments for the figure. Default is None.
+    output_path : Optional[pathlib.Path], optional
+        Path to save the figure. Default is None.
+
+    Returns
+    -------
+    tuple[mpl.figure.Figure, mpl.axes.Axes] | None
+        The figure and axes objects if `output_path` is None, otherwise None.
+
+    Examples
+    --------
+    Plot three overlaid distributions with individual histogram styles:
+
+    >>> energies = [
+    ...     np.random.normal(0.4, 0.10, 1000),
+    ...     np.random.normal(0.5, 0.08, 1000),
+    ...     np.random.normal(0.6, 0.12, 1000),
+    ... ]
+    >>> weights = [np.ones_like(arr) for arr in energies]
+    >>> fig, ax = plot_distributions(
+    ...     energies,
+    ...     bins=50,
+    ...     range=(0, 1),
+    ...     weights=weights,
+    ...     hist_kwargs=[
+    ...         {
+    ...             "histtype": "step",
+    ...             "color": "blue",
+    ...             "label": "Sample 1",
+    ...         },
+    ...         {
+    ...             "histtype": "step",
+    ...             "color": "red",
+    ...             "label": "Sample 2",
+    ...         },
+    ...         {
+    ...             "histtype": "step",
+    ...             "color": "green",
+    ...             "label": "Sample 3",
+    ...         },
+    ...     ],
+    ... )
+    >>> ax.set_xlabel("Energy")
+    >>> ax.set_ylabel("Counts")
+    >>> ax.legend()
+    """
+
+    # normalize inputs
+    arrs = [arrs] if isinstance(arrs, np.ndarray) else arrs
+    arrs = [np.asarray(arr) for arr in arrs]
+
+    if weights is None:
+        weights = [None] * len(arrs)
+    elif isinstance(weights, np.ndarray):
+        weights = [weights]
+
+    if hist_kwargs is None:
+        hist_kwargs = [{}] * len(arrs)
+    elif isinstance(hist_kwargs, dict):
+        hist_kwargs = [hist_kwargs] * len(arrs)
+
+    fig_kwargs_ = {
+        "figsize": (5, 4),
+        "constrained_layout": True,
+        "dpi": 300,
+    }
+    if fig_kwargs is not None:
+        fig_kwargs_.update(fig_kwargs)
+
+    fig, ax = plt.subplots(**fig_kwargs_)
+    for arr, w, kwargs in zip(arrs, weights, hist_kwargs):
+        plot_distribution(
+            ax,
+            arr,
+            bins=bins,
+            range=range,
+            weights=w,
+            hist_kwargs=kwargs,
+        )
+
+    if output_path is not None:
+        fig.savefig(output_path, dpi=300)
+        plt.close(fig)
+    else:
+        return fig, ax
+
+
+def plot_distribution(
+    ax: mpl.axes.Axes,
+    arr: np.ndarray,
+    bins: int = 100,
+    range: tuple[float, float] = (0, 1),
+    weights: Optional[np.ndarray] = None,
+    hist_kwargs: Optional[dict] = None,
+):
+    """
+    Plot a single 1D distribution as a histogram in an existing axes.
+
+    Parameters
+    ----------
+    ax : mpl.axes.Axes
+        The axes on which to plot the histogram.
+    arr : np.ndarray
+        The 1D array of data to plot.
+    bins : int, optional
+        The number of bins for the histogram, by default 100.
+    range : tuple[float, float], optional
+        The range of the histogram, by default (0, 1).
+    weights : Optional[np.ndarray], optional
+        The weights for each data point, by default None.
+    hist_kwargs : Optional[dict], optional
+        Additional keyword arguments for `ax.hist`, by default None.
+
+    """
+
+    if arr.ndim != 1:
+        raise ValueError(f"arr must be 1D, got shape {arr.shape}")
+
+    hist_kwargs_ = {
+        "bins": bins,
+        "range": range,
+        "histtype": "stepfilled",
+        "color": "blue",
+        "alpha": 0.7,
+    }
+
+    if hist_kwargs is not None:
+        hist_kwargs_.update(hist_kwargs)
+
+    ax.hist(arr, weights=weights, **hist_kwargs_)
+
+
+def plot_beta_distribution(
+    beta: np.ndarray,
+    output_path: Optional[pathlib.Path] = None,
+) -> None:
+    """Plot the beta distribution as a histogram."""
+
+    fig, ax = plot_distributions(
+        arrs=beta,
+        bins=100,
+        range=(0, 1),
+        fig_kwargs={"figsize": (5, 4), "constrained_layout": True, "dpi": 300},
+        hist_kwargs={"histtype": "stepfilled", "color": "blue", "alpha": 0.7},
+    )
+    ax.set_xlabel(r"$\mathrm{seedness} \ \beta$", fontsize=14)
+    ax.set_ylabel(r"$\mathrm{Counts}$", fontsize=14)
+    if output_path is not None:
+        fig.savefig(output_path, dpi=300)
+    plt.close(fig)
+
+
+def plot_min_distance_distribution(
+    min_d: np.ndarray,
+    output_path: Optional[pathlib.Path] = None,
+) -> None:
+    """Plot the minimum distance distribution as a histogram."""
+    fig, ax = plot_distributions(
+        arrs=min_d,
+        bins=100,
+        range=(0, 1),
+        fig_kwargs={"figsize": (5, 4), "constrained_layout": True, "dpi": 300},
+        hist_kwargs={"histtype": "stepfilled", "color": "blue", "alpha": 0.7},
+    )
+    ax.set_xlabel(r"$\mathrm{min} \ d_{\mathrm{seed}}$", fontsize=14)
+    ax.set_ylabel(r"$\mathrm{Counts}$", fontsize=14)
+    if output_path is not None:
+        fig.savefig(output_path, dpi=300)
+    plt.close(fig)
 
 
 def plot_confusion_matrix(
@@ -93,7 +292,7 @@ def plot_event_objects(
     output_path: Optional[pathlib.Path] = None,
 ) -> None:
     """
-    Plot the truth and predicted event objects on a 2D grid.
+    Plot the truth and predicted event objects on a 2D grid. Assume the inputs are from the same event.
 
     Parameters
     ----------
@@ -235,3 +434,51 @@ def _draw_nps_frame(
     ax.set_xlabel(r"$\mathrm{Column}$", fontsize=16)
     ax.set_ylabel(r"$\mathrm{Row}$", fontsize=16)
     ax.grid(color="0.85", linewidth=0.35)
+
+
+def get_obj_stats(
+    event_ids: np.ndarray,
+    object_ids: np.ndarray,
+    bkg_ids: Optional[list[int] | int] = None,
+) -> dict[str, Counter]:
+    """
+    Get statistics about objects in events.
+
+    Parameters
+    ----------
+    event_ids : np.ndarray
+        Array of event IDs.
+    object_ids : np.ndarray
+        Array of object IDs corresponding to the events.
+    bkg_ids : Optional[list[int]|int], optional
+        List of background object IDs, by default None.
+
+    Returns
+    -------
+    dict[str, Counter]
+        Dictionary containing statistics about objects in events. The keys of the dictionary are:
+        - "nobjs": Counter of the number of unique objects per event.
+        - "nbkgs": Counter of the number of background hits per event (assume 1 hit per bkg).
+        - "obj_sizes": Counter of the sizes of each unique object.
+    """
+
+    fields = ["nobjs", "nbkgs", "obj_sizes"]
+    object_counters = {field: Counter() for field in fields}
+    bkg_ids = (
+        [] if bkg_ids is None else ([bkg_ids] if isinstance(bkg_ids, int) else bkg_ids)
+    )
+
+    unique_events = np.unique(event_ids)
+    for i in unique_events:
+        event_objs = object_ids[event_ids == i]
+
+        is_bkg = np.isin(event_objs, bkg_ids)
+        objs = event_objs[~is_bkg]
+        bkgs = event_objs[is_bkg]
+        unique_objs, obj_sizes = np.unique(objs, return_counts=True)
+
+        object_counters["nobjs"].update([len(unique_objs)])
+        object_counters["nbkgs"].update([len(bkgs)])
+        object_counters["obj_sizes"].update(obj_sizes)
+
+    return object_counters
