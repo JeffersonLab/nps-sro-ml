@@ -1,40 +1,29 @@
 import torch
-from typing import Protocol
 
 
-class MaskProtocol(Protocol):
+def structural_causal_mask(B: int, L: int, device: torch.device) -> torch.Tensor:
+    mask_shape = [B, 1, L, L]
+    mask = torch.triu(
+        torch.ones(mask_shape, dtype=torch.bool, device=device), diagonal=1
+    )
+    return mask
+
+
+def cross_graph_mask(batch: torch.Tensor) -> torch.BoolTensor:
     """
-    Protocol for mask classes.
+    Create a block diagonal mask for a batch of graphs, where each graph is represented by its nodes. The mask will have True values for pairs of nodes that belong to different graphs and False values for pairs of nodes that belong to the same graph.
+
+    Parameters
+    ----------
+    batch: torch.Tensor
+        Batch vector, shape [N], batch[i] = graph index of node i
+
+    Returns
+    -------
+    mask: torch.BoolTensor
+        Mask tensor, shape [N, N], where mask[i, j] = True if nodes i and j belong to different graphs, and False otherwise.
     """
-
-    mask: torch.Tensor
-
-
-class TriangularCausalMask:
-    """
-    Triangular causal mask for sequence modeling.
-    """
-
-    def __init__(self, B: int, L: int, device: str = "cpu"):
-        """
-        Initialize the triangular causal mask.
-
-        Parameters
-        ----------
-        B : int
-            Batch size.
-        L : int
-            Sequence length.
-        device : str, optional
-            Device to store the mask on, by default "cpu".
-        """
-        mask_shape = [B, 1, L, L]
-        with torch.no_grad():
-            self._mask = torch.triu(
-                torch.ones(mask_shape, dtype=torch.bool), diagonal=1
-            ).to(device)
-
-    @property
-    def mask(self):
-        """Return the triangular causal mask."""
-        return self._mask
+    graph_ids_q = batch.reshape(1, 1, -1, 1)
+    graph_ids_k = batch.reshape(1, 1, 1, -1)
+    mask = graph_ids_q != graph_ids_k
+    return mask

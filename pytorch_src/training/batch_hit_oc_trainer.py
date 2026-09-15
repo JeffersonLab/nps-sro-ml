@@ -8,11 +8,7 @@ from base.trainer import BaseTrainer
 from base.model import BaseModel
 from base.dataloader import BaseDataLoader
 from models.oc_loss import oc_loss_per_batch
-from utils.graph import (
-    create_unique_object_ids,
-    reorder_from_graph_batches,
-    pack_to_graph_batches,
-)
+from utils.graph import create_unique_object_ids
 
 
 def create_sample_mask(
@@ -105,7 +101,7 @@ class ObjectCondensationTrainer(BaseTrainer):
         beta: torch.Tensor,
         object_ids: torch.Tensor,
         batch: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Compute the object condensation losses for a batch of data. This includes the attractive loss, repulsive loss, cowardly loss, and noise loss.
 
@@ -151,9 +147,6 @@ class ObjectCondensationTrainer(BaseTrainer):
 
         return l_attr, l_repul, l_coward, l_noise
 
-    def _preprocess(self, data):
-        return data
-
     def _train_epoch(self, epoch):
 
         self.model.train()
@@ -186,12 +179,7 @@ class ObjectCondensationTrainer(BaseTrainer):
                 )
                 x, pos, batch, object_ids = apply_mask(mask, x, pos, batch, object_ids)
 
-            outs, idx_out, node_mask = pack_to_graph_batches(x, [pos], batch=batch)
-            x, pos = outs[0], outs[1]
-            x_c, beta = self.model(x, pos, node_mask)
-
-            x_c = reorder_from_graph_batches(x_c, idx_out)
-            beta = reorder_from_graph_batches(beta, idx_out)
+            x_c, beta = self.model(x, pos, batch)
             beta = beta.squeeze(-1)
 
             l_attr, l_repul, l_coward, l_noise = self._compute_oc_losses(
@@ -254,12 +242,7 @@ class ObjectCondensationTrainer(BaseTrainer):
                 )
                 object_ids = create_unique_object_ids(y, batch, noise_idx)
 
-                outs, idx_out, node_mask = pack_to_graph_batches(x, [pos], batch=batch)
-                x, pos = outs[0], outs[1]
-                x_c, beta = self.model(x, pos, node_mask)
-
-                x_c = reorder_from_graph_batches(x_c, idx_out)
-                beta = reorder_from_graph_batches(beta, idx_out)
+                x_c, beta = self.model(x, pos, batch)
                 beta = beta.squeeze(-1)
 
                 l_attr, l_repul, l_coward, l_noise = self._compute_oc_losses(
@@ -311,15 +294,11 @@ class ObjectCondensationTrainer(BaseTrainer):
             else torch.zeros(x.shape[0], dtype=torch.long, device=x.device)
         )
 
-        outs, idx_out, node_mask = pack_to_graph_batches(x, [pos], batch=batch)
-        x, pos = outs[0], outs[1]
-
-        batch_size = Dim("batch_size", min=1)
-        graph_size = Dim("graph_size", min=1)
+        node_size = Dim("node_size", min=1)
         dynamic_shapes = {
-            "x": {0: batch_size, 1: graph_size},
-            "pos": {0: batch_size, 1: graph_size},
-            "mask": {0: batch_size, 1: graph_size},
+            "x": {0: node_size},
+            "pos": {0: node_size},
+            "batch": {0: node_size},
         }
 
         artifacts_dir = self.checkpoint_dir / "onnx_artifacts"
@@ -327,11 +306,11 @@ class ObjectCondensationTrainer(BaseTrainer):
 
         torch.onnx.export(
             self.model,
-            (x, pos, node_mask),
+            (x, pos, batch),
             str(pth),
             dynamo=True,
             dynamic_shapes=dynamic_shapes,
-            input_names=["x", "pos", "mask"],
+            input_names=["x", "pos", "batch"],
             verify=True,
             report=True,
             artifacts_dir=str(artifacts_dir),

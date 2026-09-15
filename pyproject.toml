@@ -1,28 +1,124 @@
-[build-system]
-requires = ["setuptools>=65.5.1", "wheel"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "nps-sro-ml"
-version = "0.0.1"
+version = "1.0"
 description = "AI/ML application on Streaming Readout Data in NPS experiment"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
+# Install examples:
+#   uv sync --extra torch-cpu
+#   uv sync --extra torch-cu130
+#   uv sync --extra torch-2-11
+
 dependencies = [
     "numpy>=1.26.2",
     "pandas>=2.1.3",
     "scipy>=1.12.0",
+    "matplotlib>=3.10.9",
+    "tensorboard>=2.20.0",
+    "requests>=2.33.0",
+    "onnxscript>=0.7.0",
+    "onnxruntime>=1.25.0",
+    "scikit-learn>=1.8",
+    "tqdm",
     "black",
-    "ruff"
+    "ruff",
 ]
 
 [project.optional-dependencies]
+torch-cpu = [
+    "torch==2.9.0",
+]
+torch-cu126 = [
+    "torch==2.9.0",
+]
+torch-cu128 = [
+    "torch==2.9.0",
+]
+torch-cu130 = [
+    "torch==2.9.0",
+]
+torch-2-11 = [
+    "torch==2.11.0",
+]
+
+[dependency-groups]
 dev = [
     "pytest>=8.0.0",
 ]
 
-[tool.setuptools.packages.find]
-where = ["pytorch_src"]
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "torch-cpu" },
+    { index = "pytorch-cu126", extra = "torch-cu126" },
+    { index = "pytorch-cu128", extra = "torch-cu128" },
+    { index = "pytorch-cu130", extra = "torch-cu130" },
+]
+
+[tool.uv]
+package = false
+conflicts = [
+    [
+        { extra = "torch-cpu" },
+        { extra = "torch-cu126" },
+    ],
+    [
+        { extra = "torch-cpu" },
+        { extra = "torch-cu128" },
+    ],
+    [
+        { extra = "torch-cpu" },
+        { extra = "torch-cu130" },
+    ],
+    [
+        { extra = "torch-cu126" },
+        { extra = "torch-cu128" },
+    ],
+    [
+        { extra = "torch-cu126" },
+        { extra = "torch-cu130" },
+    ],
+    [
+        { extra = "torch-cu128" },
+        { extra = "torch-cu130" },
+    ],
+    [
+        { extra = "torch-cpu" },
+        { extra = "torch-2-11" },
+    ],
+    [
+        { extra = "torch-cu126" },
+        { extra = "torch-2-11" },
+    ],
+    [
+        { extra = "torch-cu128" },
+        { extra = "torch-2-11" },
+    ],
+    [
+        { extra = "torch-cu130" },
+        { extra = "torch-2-11" },
+    ],
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
 
 [tool.black]
 line-length = 88

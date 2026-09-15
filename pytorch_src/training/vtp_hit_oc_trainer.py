@@ -3,16 +3,13 @@ import torch
 import pathlib
 from typing import Optional, Tuple
 from torch.export import Dim
+import torch.nn.functional as F
 
 from base.trainer import BaseTrainer
 from base.model import BaseModel
 from base.dataloader import BaseDataLoader
 from models.oc_loss import oc_loss_per_batch
-from utils.graph import (
-    create_unique_object_ids,
-    reorder_from_graph_batches,
-    pack_to_graph_batches,
-)
+from utils.graph import create_unique_object_ids
 
 
 def create_sample_mask(
@@ -103,9 +100,11 @@ class ObjectCondensationTrainer(BaseTrainer):
         self,
         x_c: torch.Tensor,
         beta: torch.Tensor,
+        feat_loss: torch.Tensor,
         object_ids: torch.Tensor,
+        is_signal: torch.Tensor,
         batch: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Compute the object condensation losses for a batch of data. This includes the attractive loss, repulsive loss, cowardly loss, and noise loss.
 
@@ -115,8 +114,12 @@ class ObjectCondensationTrainer(BaseTrainer):
             The condensed coordinates output by the model, shape [N, C].
         beta : torch.Tensor
             The beta values output by the model, shape [N].
+        feat_loss : torch.Tensor
+            The feature loss for each node, shape [N].
         object_ids : torch.Tensor
             Tensor of shape [N] containing the object ID for each node.
+        is_signal : torch.Tensor
+            Boolean tensor of shape [N] indicating whether each node is a signal node (True) or a background node (False).
         batch : torch.Tensor
             Tensor of shape [N] indicating the graph index for each node in a batched setting.
 
@@ -126,21 +129,22 @@ class ObjectCondensationTrainer(BaseTrainer):
             A tuple containing the attractive loss, repulsive loss, cowardly loss, and noise loss for the batch.
         """
         q_min = self.config.get("q_min", 0.3)
-        noise_idx = self.config.get("noise_idx", -1)
         margin = self.config.get("margin", 1.0)
 
         attr_scale = self.config.get("attr_scale", 1.0)
         repul_scale = self.config.get("repul_scale", 1.0)
         coward_scale = self.config.get("coward_scale", 1.0)
         noise_scale = self.config.get("noise_scale", 0.0)
+        feat_scale = self.config.get("feat_scale", 1.0)
 
-        l_attr, l_repul, l_coward, l_noise = oc_loss_per_batch(
+        l_attr, l_repul, l_coward, l_noise, l_feat = oc_loss_per_batch(
             x=x_c,
             beta=beta,
             object_id=object_ids,
+            is_sig=is_signal,
             batch=batch,
+            feat_loss=feat_loss,
             q_min=q_min,
-            noise_idx=noise_idx,
             margin=margin,
         )
 
@@ -148,11 +152,31 @@ class ObjectCondensationTrainer(BaseTrainer):
         l_repul *= repul_scale
         l_coward *= coward_scale
         l_noise *= noise_scale
+        if l_feat is not None:
+            l_feat *= feat_scale
+        else:
+            l_feat = torch.tensor(0.0, device=x_c.device)
 
-        return l_attr, l_repul, l_coward, l_noise
+        return l_attr, l_repul, l_coward, l_noise, l_feat
 
-    def _preprocess(self, data):
-        return data
+    def _preprocess_data(self, x, pos):
+
+        NCOLS = 30
+        NROWS = 36
+        NTIME = 110
+
+        e = x[:, 0]
+        scaled_t = 2 * x[:, 1] / NTIME - 1
+        scaled_e = e / 1600
+        log_e = torch.log1p(e)
+
+        scaled_x = 2 * pos[:, 0] / NCOLS - 1
+        scaled_y = 2 * pos[:, 1] / NROWS - 1
+
+        return (
+            torch.stack([scaled_e, log_e, scaled_t], dim=-1),
+            torch.stack([scaled_x, scaled_y], dim=-1),
+        )
 
     def _train_epoch(self, epoch):
 
@@ -168,13 +192,17 @@ class ObjectCondensationTrainer(BaseTrainer):
 
             x = data.x
             y = data.y.squeeze(-1).long()
+            cluster_type = data.cluster_type.squeeze(-1).long()
             pos = data.pos
+            x, pos = self._preprocess_data(x, pos)
+
             batch = (
                 data.batch
                 if hasattr(data, "batch")
                 else torch.zeros(x.shape[0], dtype=torch.long, device=x.device)
             )
             object_ids = create_unique_object_ids(y, batch, noise_idx)
+            is_signal = object_ids != noise_idx
 
             if downsample:
                 mask_scale = self.config.get("mask_scale", 1.0)
@@ -186,18 +214,24 @@ class ObjectCondensationTrainer(BaseTrainer):
                 )
                 x, pos, batch, object_ids = apply_mask(mask, x, pos, batch, object_ids)
 
-            outs, idx_out, node_mask = pack_to_graph_batches(x, [pos], batch=batch)
-            x, pos = outs[0], outs[1]
-            x_c, beta = self.model(x, pos, node_mask)
-
-            x_c = reorder_from_graph_batches(x_c, idx_out)
-            beta = reorder_from_graph_batches(beta, idx_out)
+            x_c, beta, x_signal = self.model(x, pos, batch)
             beta = beta.squeeze(-1)
+            x_signal = x_signal.squeeze(-1)
 
-            l_attr, l_repul, l_coward, l_noise = self._compute_oc_losses(
-                x_c, beta, object_ids, batch
+            l_feats = [
+                F.binary_cross_entropy_with_logits(
+                    x_signal, cluster_type.float(), reduction="none"
+                )
+            ]
+
+            l_feat = (
+                l_feats[0] if len(l_feats) == 1 else torch.sum(torch.stack(l_feats), -1)
             )
-            loss = l_attr + l_repul + l_coward + l_noise
+
+            l_attr, l_repul, l_coward, l_noise, l_feat = self._compute_oc_losses(
+                x_c, beta, l_feat, object_ids, is_signal, batch
+            )
+            loss = l_attr + l_repul + l_coward + l_noise + l_feat
             loss.backward()
 
             self.optimizer.step()
@@ -208,6 +242,7 @@ class ObjectCondensationTrainer(BaseTrainer):
             self.writer.add_scalar('l_repul', l_repul.item())
             self.writer.add_scalar('l_coward', l_coward.item())
             self.writer.add_scalar('l_noise', l_noise.item())
+            self.writer.add_scalar('l_feat', l_feat.item())
 
             if batch_idx % 10 == 0:
                 self.writer.add_histogram("beta_train", beta, bins='auto')
@@ -246,26 +281,38 @@ class ObjectCondensationTrainer(BaseTrainer):
 
                 x = data.x
                 y = data.y.squeeze(-1).long()
+                cluster_type = data.cluster_type.squeeze(-1).long()
                 pos = data.pos
+                x, pos = self._preprocess_data(x, pos)
+
                 batch = (
                     data.batch
                     if hasattr(data, "batch")
                     else torch.zeros(x.shape[0], dtype=torch.long, device=x.device)
                 )
                 object_ids = create_unique_object_ids(y, batch, noise_idx)
+                is_signal = object_ids != noise_idx
 
-                outs, idx_out, node_mask = pack_to_graph_batches(x, [pos], batch=batch)
-                x, pos = outs[0], outs[1]
-                x_c, beta = self.model(x, pos, node_mask)
-
-                x_c = reorder_from_graph_batches(x_c, idx_out)
-                beta = reorder_from_graph_batches(beta, idx_out)
+                x_c, beta, x_signal = self.model(x, pos, batch)
                 beta = beta.squeeze(-1)
+                x_signal = x_signal.squeeze(-1)
 
-                l_attr, l_repul, l_coward, l_noise = self._compute_oc_losses(
-                    x_c, beta, object_ids, batch
+                l_feats = [
+                    F.binary_cross_entropy_with_logits(
+                        x_signal, cluster_type.float(), reduction="none"
+                    )
+                ]
+
+                l_feat = (
+                    l_feats[0]
+                    if len(l_feats) == 1
+                    else torch.sum(torch.stack(l_feats), -1)
                 )
-                loss = l_attr + l_repul + l_coward + l_noise
+
+                l_attr, l_repul, l_coward, l_noise, l_feat = self._compute_oc_losses(
+                    x_c, beta, l_feat, object_ids, is_signal, batch
+                )
+                loss = l_attr + l_repul + l_coward + l_noise + l_feat
 
                 self.writer.set_step(
                     (epoch - 1) * len(self.valid_dataloader) + batch_idx, 'valid'
@@ -275,6 +322,7 @@ class ObjectCondensationTrainer(BaseTrainer):
                 self.writer.add_scalar('l_repul', l_repul.item())
                 self.writer.add_scalar('l_coward', l_coward.item())
                 self.writer.add_scalar('l_noise', l_noise.item())
+                self.writer.add_scalar('l_feat', l_feat.item())
 
                 if batch_idx % 10 == 0:
                     self.writer.add_histogram("beta_valid", beta, bins='auto')
@@ -310,16 +358,13 @@ class ObjectCondensationTrainer(BaseTrainer):
             if hasattr(data, "batch")
             else torch.zeros(x.shape[0], dtype=torch.long, device=x.device)
         )
+        x, pos = self._preprocess_data(x, pos)
 
-        outs, idx_out, node_mask = pack_to_graph_batches(x, [pos], batch=batch)
-        x, pos = outs[0], outs[1]
-
-        batch_size = Dim("batch_size", min=1)
-        graph_size = Dim("graph_size", min=1)
+        node_size = Dim("node_size", min=1)
         dynamic_shapes = {
-            "x": {0: batch_size, 1: graph_size},
-            "pos": {0: batch_size, 1: graph_size},
-            "mask": {0: batch_size, 1: graph_size},
+            "x": {0: node_size},
+            "pos": {0: node_size},
+            "batch": {0: node_size},
         }
 
         artifacts_dir = self.checkpoint_dir / "onnx_artifacts"
@@ -327,11 +372,11 @@ class ObjectCondensationTrainer(BaseTrainer):
 
         torch.onnx.export(
             self.model,
-            (x, pos, node_mask),
+            (x, pos, batch),
             str(pth),
             dynamo=True,
             dynamic_shapes=dynamic_shapes,
-            input_names=["x", "pos", "mask"],
+            input_names=["x", "pos", "batch"],
             verify=True,
             report=True,
             artifacts_dir=str(artifacts_dir),

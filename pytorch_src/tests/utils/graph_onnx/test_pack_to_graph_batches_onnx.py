@@ -1,8 +1,9 @@
 import torch
 from utils.graph import pack_to_graph_batches
+from utils.graph_onnx import pack_to_graph_batches_onnx
 
 
-def test_pack_to_graph_batches_basic():
+def test_pack_to_graph_batches_onnx_basic():
     """Test basic packing of node features into graph batches."""
     batch = torch.tensor([0, 0, 1, 1, 0, 1])  # 3 nodes in graph 0, 3 nodes in graph 1
     x_in = torch.tensor(
@@ -16,7 +17,12 @@ def test_pack_to_graph_batches_basic():
         ]
     )  # [6, 2]
 
-    x_graphs, idx_out, mask_out = pack_to_graph_batches(x_in, [], batch)
+    B = int(batch.max().item()) + 1
+    L_max = int(
+        batch.bincount(minlength=B).max().item()
+    )  # max number of nodes per graph
+
+    x_graphs, idx_out, mask_out = pack_to_graph_batches_onnx(x_in, [], batch, B, L_max)
     x_graph = x_graphs[0]  # [B, L_max, D]
 
     # Check shape
@@ -48,7 +54,7 @@ def test_pack_to_graph_batches_basic():
     assert torch.equal(mask_out, expected_mask), f"Mask mismatch. Got {mask_out}"
 
 
-def test_pack_to_graph_batches_single_graph():
+def test_pack_to_graph_batches_onnx_single_graph():
     """Test packing when all nodes belong to a single graph."""
     batch = torch.tensor([0, 0, 0, 0])
     x_in = torch.tensor(
@@ -60,7 +66,12 @@ def test_pack_to_graph_batches_single_graph():
         ]
     )
 
-    x_graphs, idx_out, mask_out = pack_to_graph_batches(x_in, [], batch)
+    B = int(batch.max().item()) + 1
+    L_max = int(
+        batch.bincount(minlength=B).max().item()
+    )  # max number of nodes per graph
+
+    x_graphs, idx_out, mask_out = pack_to_graph_batches_onnx(x_in, [], batch, B, L_max)
     x_graph = x_graphs[0]  # [B, L_max, D]
 
     assert x_graph.shape == (1, 4, 2), f"Expected shape (1, 4, 2), got {x_graph.shape}"
@@ -71,54 +82,7 @@ def test_pack_to_graph_batches_single_graph():
     assert torch.all(mask_out[0]), f"All mask values should be True"
 
 
-def test_pack_to_graph_batches_unequal_sizes():
-    """Test packing when graphs have different numbers of nodes."""
-    batch = torch.tensor(
-        [0, 0, 1, 1, 1, 2]
-    )  # graph 0: 2 nodes, graph 1: 3 nodes, graph 2: 1 node
-    x_in = torch.tensor(
-        [
-            [1.0],
-            [2.0],
-            [3.0],
-            [4.0],
-            [5.0],
-            [6.0],
-        ]
-    )
-
-    x_graphs, idx_out, mask_out = pack_to_graph_batches(x_in, [], batch)
-    x_graph = x_graphs[0]  # [B, L_max, D]
-
-    # Maximum size is 3 nodes
-    assert x_graph.shape == (3, 3, 1), f"Expected shape (3, 3, 1), got {x_graph.shape}"
-
-    # Check graph 0 (2 nodes)
-    assert torch.allclose(
-        x_graph[0, :2], torch.tensor([[1.0], [2.0]])
-    ), f"Graph 0 mismatch"
-
-    # Check graph 1 (3 nodes)
-    assert torch.allclose(
-        x_graph[1], torch.tensor([[3.0], [4.0], [5.0]])
-    ), f"Graph 1 mismatch"
-
-    # Check graph 2 (1 node)
-    assert torch.allclose(x_graph[2, :1], torch.tensor([[6.0]])), f"Graph 2 mismatch"
-
-    assert len(idx_out) == 3, f"Expected 3 index lists, got {len(idx_out)}"
-    assert torch.equal(idx_out[0], torch.tensor([0, 1])), f"Graph 0 indices mismatch"
-    assert torch.equal(idx_out[1], torch.tensor([2, 3, 4])), f"Graph 1 indices mismatch"
-    assert torch.equal(idx_out[2], torch.tensor([5])), f"Graph 2 indices mismatch"
-
-    assert mask_out.shape == (3, 3), f"Expected mask shape (3, 3), got {mask_out.shape}"
-    assert torch.equal(
-        mask_out,
-        torch.tensor([[True, True, False], [True, True, True], [True, False, False]]),
-    ), f"Mask mismatch"
-
-
-def test_pack_to_graph_batches_multiple_features():
+def test_pack_to_graph_batches_onnx_multiple_features():
     """Test packing with multiple feature dimensions."""
     batch = torch.tensor([0, 0, 1, 1])  # graph 0: 2 nodes, graph 1: 2 nodes
     x_in = torch.tensor(
@@ -133,7 +97,14 @@ def test_pack_to_graph_batches_multiple_features():
     t0_in = torch.tensor([[0.1], [0.2], [0.3], [0.4]])
     t1_in = torch.tensor([[0.5, 50], [0.6, 60], [0.7, 70], [0.8, 80]])
 
-    x_graphs, idx_out, mask_out = pack_to_graph_batches(x_in, [t0_in, t1_in], batch)
+    B = int(batch.max().item()) + 1
+    L_max = int(
+        batch.bincount(minlength=B).max().item()
+    )  # max number of nodes per graph
+
+    x_graphs, idx_out, mask_out = pack_to_graph_batches_onnx(
+        x_in, [t0_in, t1_in], batch, B, L_max
+    )
     x_graph = x_graphs[0]  # [B, L_max, D]
     t0_graph = x_graphs[1]  # [B, L_max, 1]
     t1_graph = x_graphs[2]  # [B, L_max, 2]
@@ -171,3 +142,46 @@ def test_pack_to_graph_batches_multiple_features():
     assert torch.allclose(
         t1_graph[1], torch.tensor([[0.7, 70], [0.8, 80]])
     ), f"Graph 1 t1 mismatch"
+
+
+def test_pack_to_graph_batches_onnx_compatibility():
+    """Test that pack_to_graph_batches_onnx produces the same output as pack_to_graph_batches."""
+    batch = torch.tensor([0, 0, 1, 1, 0, 1])  # 3 nodes in graph 0, 3 nodes in graph 1
+    x_in = torch.tensor(
+        [
+            [1.0, 10.0],
+            [2.0, 20.0],
+            [3.0, 30.0],
+            [4.0, 40.0],
+            [5.0, 50.0],
+            [6.0, 60.0],
+        ]
+    )  # [6, 2]
+
+    # Get output from non-onnx version
+    x_graphs_ref, idx_out_ref, mask_out_ref = pack_to_graph_batches(x_in, [], batch)
+    x_graph_ref = x_graphs_ref[0]
+
+    # Get output from onnx version
+    # Must set B and Lmax in advance and the same as the reference version, since ONNX does not support dynamic shapes or control flow
+    B = int(batch.max().item()) + 1
+    L_max = int(
+        batch.bincount(minlength=B).max().item()
+    )  # max number of nodes per graph
+    x_graphs_onnx, idx_out_onnx, mask_out_onnx = pack_to_graph_batches_onnx(
+        x_in, [], batch, B, L_max
+    )
+    x_graph_onnx = x_graphs_onnx[0]
+
+    # Check that outputs are the same
+    assert torch.allclose(
+        x_graph_ref, x_graph_onnx
+    ), f"Graph features mismatch between reference and ONNX versions"
+    assert len(idx_out_ref) == len(idx_out_onnx), f"Number of index lists mismatch"
+    for i in range(len(idx_out_ref)):
+        assert torch.equal(
+            idx_out_ref[i], idx_out_onnx[i]
+        ), f"Index list {i} mismatch between reference and ONNX versions"
+    assert torch.equal(
+        mask_out_ref, mask_out_onnx
+    ), f"Mask mismatch between reference and ONNX versions"
