@@ -28,6 +28,7 @@ export default withMermaid({
         // Improved navigation
         nav: [
             { text: 'Home', link: '/' },
+            { text: 'Contributing', link: '/contributing/CONTRIBUTING' },
             {
                 text: 'Resources',
                 items: [
@@ -54,6 +55,30 @@ export default withMermaid({
                     { text: 'Data Access', link: '/data' },
                 ]
             },
+
+            {
+                text: 'Contributing',
+                collapsed: true,
+                items: [
+                    {
+                        text: 'Overview',
+                        link: '/contributing/CONTRIBUTING',
+                    },
+                    {
+                        text: 'Contribution workflow',
+                        link: '/contributing/workflow',
+                    },
+                    {
+                        text: 'Contributing code',
+                        link: '/contributing/code',
+                    },
+                    {
+                        text: 'Reporting a bug',
+                        link: '/contributing/bug',
+                    },
+                ],
+            },
+
             {
                 text: 'Other',
                 items: [
