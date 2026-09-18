@@ -33,7 +33,7 @@ export default withMermaid({
                 text: 'Resources',
                 items: [
                     { text: 'Meetings', link: 'https://wiki.jlab.org/cuawiki/index.php/EIC_Meson_SF_Meeting_Material_and_Summaries' },
-                    { text: 'Data', link: '/data' },
+                    { text: 'Data', link: '/data/' },
                     { text: 'GitHub', link: 'https://github.com/JeffersonLab/nps-sro-ml' }
                 ]
             },
@@ -46,14 +46,65 @@ export default withMermaid({
                 collapsed: false, // Ensure this is not collapsed
                 items: [
                     { text: 'About', link: '/' },
+                    { text: 'Directory structure', link: '/directory' },
+                    { text: 'Installation', link: '/installation' }
                 ]
             },
             {
                 text: 'Data',
-                link: '/data',
+                link: '/data/',
                 items: [
-                    { text: 'Data Access', link: '/data' },
+                    { text: 'Raw data', link: '/data/raw' },
+                    { text: 'Training data', link: '/data/training' },
                 ]
+            },
+
+            {
+                text: 'Tutorials',
+                collapsed: false,
+                items: [
+                    {
+                        text: 'general',
+                        collapsed: true,
+                        items : [
+                            { text: 'iFarm', link: '/tutorials/general/ifarm' },
+                            { text: 'Container', link: '/tutorials/general/container' },
+                            { text: 'uv', link: '/tutorials/general/uv' },
+                            { text: 'VDI', link: '/tutorials/general/vdi' }
+                        ]
+                    },
+                    {
+                        text: 'PyTorch',
+                        collapsed: false,
+                        items: [
+                            { text: 'Overview', link: '/tutorials/pytorch/index' },
+                            { text: 'Datasets', link: '/tutorials/pytorch/dataset' },
+                            { text: 'Writing a model', link: '/tutorials/pytorch/model' },
+                            { text: 'Training', link: '/tutorials/pytorch/training' },
+                            { text: 'Inference', link: '/tutorials/pytorch/inference' },
+                            { text: 'Implementation checklist', link: '/tutorials/pytorch/summary' },
+                        ]
+                    },
+
+                    {
+                        text: 'Data conversion',
+                        collapsed: false,
+
+                        items: [
+                            {
+                                text: 'Converter',
+                                link: '/tutorials/converter/converter'
+                            },
+                            {
+                                text : 'External',
+                                link: '/tutorials/converter/external'
+                            }
+                        ]
+                    },
+
+
+                ],
+
             },
 
             {
