@@ -58,7 +58,7 @@ export default withMermaid({
 
             {
                 text: 'Contributing',
-                collapsed: false,
+                collapsed: true,
                 items: [
                     {
                         text: 'Overview',
@@ -70,7 +70,7 @@ export default withMermaid({
                     },
                     {
                         text: 'Contributing code',
-                        link: '/contributing/format',
+                        link: '/contributing/code',
                     },
                     {
                         text: 'Reporting a bug',
