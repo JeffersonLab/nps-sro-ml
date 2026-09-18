@@ -128,4 +128,18 @@ uv run python scripts/train.py -c config/train.json --debug
 ONNX export is implemented by the selected trainer, so a custom forward
 signature must be matched by a custom `export_onnx` implementation.
 
+## Design for ONNX deployment
+
+[ONNX](https://onnx.ai/) provides a framework-independent model format, making
+it possible to train in PyTorch and deploy with different inference runtimes
+and hardware backends.
+
+The most reliable deployment approach is to track ONNX compatibility while the
+model is being designed. Prefer exportable tensor operations, make dynamic
+dimensions explicit, and avoid Python-only control flow or custom operators
+unless the target runtime supports them. Export and run a representative batch
+regularly—such as with training's `--debug` mode—and compare ONNX Runtime
+outputs with PyTorch. This catches unsupported operations and shape assumptions
+before training an expensive final model.
+
 Next: [write a trainer and run training](./training.md).

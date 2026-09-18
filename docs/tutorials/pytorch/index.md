@@ -42,3 +42,6 @@ converted data -> dataset/loader -> model -> trainer -> checkpoint -> inference/
 The tutorials use the hit-level object-condensation pipeline as the concrete
 example, but the same component boundaries support custom models, trainers,
 and inference logic.
+
+Use the [implementation checklist](./summary.md) before starting a full
+training run or handing a model off for deployment.
